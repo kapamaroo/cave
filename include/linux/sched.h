@@ -13,6 +13,7 @@
 #include <linux/pid.h>
 #include <linux/sem.h>
 #include <linux/shm.h>
+#include <linux/cave.h>
 #include <linux/kcov.h>
 #include <linux/mutex.h>
 #include <linux/plist.h>
@@ -515,6 +516,10 @@ struct task_struct {
 	int				static_prio;
 	int				normal_prio;
 	unsigned int			rt_priority;
+
+#ifdef CONFIG_UNISERVER_CAVE
+	cave_data_t			cave_data;
+#endif
 
 	const struct sched_class	*sched_class;
 	struct sched_entity		se;

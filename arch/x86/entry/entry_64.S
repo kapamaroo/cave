@@ -96,6 +96,33 @@ ENDPROC(native_usergs_sysret64)
 # define TRACE_IRQS_IRETQ_DEBUG			TRACE_IRQS_IRETQ
 #endif
 
+.macro ENTRY_HOOK
+#ifdef CONFIG_UNISERVER_CAVE
+	call	cave_entry_switch
+        RESTORE_C_REGS
+#endif
+.endm
+
+.macro ENTRY_HOOK_NORESTORE
+#ifdef CONFIG_UNISERVER_CAVE
+	call	cave_entry_switch
+#endif
+.endm
+
+.macro ENTRY_HOOK_SYSCALL
+#ifdef CONFIG_UNISERVER_CAVE
+	call	cave_entry_switch
+        RESTORE_C_REGS_EXCEPT_RAX
+	movq	ORIG_RAX(%rsp), %rax
+#endif
+.endm
+
+.macro EXIT_HOOK
+#ifdef CONFIG_UNISERVER_CAVE
+	call	cave_exit_switch
+#endif
+.endm
+
 /*
  * 64-bit SYSCALL instruction entry. Up to 6 arguments in registers.
  *
@@ -171,6 +198,8 @@ GLOBAL(entry_SYSCALL_64_after_swapgs)
 	pushq	%r11				/* pt_regs->r11 */
 	sub	$(6*8), %rsp			/* pt_regs->bp, bx, r12-15 not saved */
 
+	ENTRY_HOOK_SYSCALL
+
 	/*
 	 * If we need to do entry work or if we guess we'll need to do
 	 * exit work, go straight to the slow path.
@@ -217,6 +246,8 @@ entry_SYSCALL_64_fastpath:
 	movq	PER_CPU_VAR(current_task), %r11
 	testl	$_TIF_ALLWORK_MASK, TASK_TI_flags(%r11)
 	jnz	1f
+
+	EXIT_HOOK
 
 	LOCKDEP_SYS_EXIT
 	TRACE_IRQS_ON		/* user mode is traced as IRQs on */
@@ -316,12 +347,21 @@ return_from_SYSCALL_64:
 	 * perf profiles. Nothing jumps here.
 	 */
 syscall_return_via_sysret:
+	EXIT_HOOK
+
+#ifdef CONFIG_UNISERVER_CAVE
+	/* voffset calls may clobber rcx and r11 */
+	RESTORE_C_REGS
+#else
 	/* rcx and r11 are already restored (see code above) */
 	RESTORE_C_REGS_EXCEPT_RCX_R11
+#endif
 	movq	RSP(%rsp), %rsp
 	USERGS_SYSRET64
 
 opportunistic_sysret_failed:
+	EXIT_HOOK
+
 	SWAPGS
 	jmp	restore_c_regs_and_iret
 END(entry_SYSCALL_64)
@@ -420,6 +460,9 @@ ENTRY(ret_from_fork)
 	leaq	FRAME_OFFSET(%rsp),%rdi	/* pt_regs pointer */
 	call	syscall_return_slowpath	/* returns with IRQs disabled */
 	TRACE_IRQS_ON			/* user mode is traced as IRQS on */
+
+	EXIT_HOOK
+
 	SWAPGS
 	FRAME_END
 	jmp	restore_regs_and_iret
@@ -489,6 +532,8 @@ END(irq_entries_start)
 
 	CALL_enter_from_user_mode
 
+	ENTRY_HOOK_NORESTORE
+
 1:
 	/*
 	 * Save previous stack pointer, optionally switch to interrupt stack.
@@ -533,6 +578,9 @@ GLOBAL(retint_user)
 	mov	%rsp,%rdi
 	call	prepare_exit_to_usermode
 	TRACE_IRQS_IRETQ
+
+	EXIT_HOOK
+
 	SWAPGS
 	jmp	restore_regs_and_iret
 
@@ -1034,6 +1082,9 @@ ENTRY(paranoid_entry)
 	testl	%edx, %edx
 	js	1f				/* negative -> in kernel */
 	SWAPGS
+
+	ENTRY_HOOK
+
 	xorl	%ebx, %ebx
 1:	ret
 END(paranoid_entry)
@@ -1056,6 +1107,9 @@ ENTRY(paranoid_exit)
 	testl	%ebx, %ebx			/* swapgs needed? */
 	jnz	paranoid_exit_no_swapgs
 	TRACE_IRQS_IRETQ
+
+	EXIT_HOOK
+
 	SWAPGS_UNSAFE_STACK
 	jmp	paranoid_exit_restore
 paranoid_exit_no_swapgs:
@@ -1094,6 +1148,9 @@ ENTRY(error_entry)
 	 */
 	TRACE_IRQS_OFF
 	CALL_enter_from_user_mode
+
+	ENTRY_HOOK
+
 	ret
 
 .Lerror_entry_done:
@@ -1123,6 +1180,9 @@ ENTRY(error_entry)
 	 * .Lgs_change's error handler with kernel gsbase.
 	 */
 	SWAPGS
+
+	ENTRY_HOOK
+
 	jmp .Lerror_entry_done
 
 .Lbstep_iret:
@@ -1260,6 +1320,8 @@ ENTRY(nmi)
 	pushq	%r15		/* pt_regs->r15 */
 	ENCODE_FRAME_POINTER
 
+	ENTRY_HOOK_NORESTORE
+
 	/*
 	 * At this point we no longer need to worry about stack damage
 	 * due to nesting -- we're on the normal thread stack and we're
@@ -1269,6 +1331,8 @@ ENTRY(nmi)
 	movq	%rsp, %rdi
 	movq	$-1, %rsi
 	call	do_nmi
+
+	EXIT_HOOK
 
 	/*
 	 * Return back to user mode.  We must *not* do the normal exit
@@ -1485,6 +1549,8 @@ end_repeat_nmi:
 	testl	%ebx, %ebx			/* swapgs needed? */
 	jnz	nmi_restore
 nmi_swapgs:
+	EXIT_HOOK
+
 	SWAPGS_UNSAFE_STACK
 nmi_restore:
 	RESTORE_EXTRA_REGS

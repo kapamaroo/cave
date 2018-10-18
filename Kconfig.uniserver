@@ -1,3 +1,12 @@
 menu "UniServer Platform"
 
+config UNISERVER_CAVE
+        bool "CAVE feature"
+        default n
+
+config UNISERVER_CAVE_TEST_MODE
+        bool "CAVE feature, test mode"
+        default n
+        depends on UNISERVER_CAVE
+
 endmenu

@@ -87,6 +87,7 @@
 #include <linux/compiler.h>
 #include <linux/sysctl.h>
 #include <linux/kcov.h>
+#include <linux/cave.h>
 
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
@@ -1873,6 +1874,10 @@ static __latent_entropy struct task_struct *copy_process(
 
 	trace_task_newtask(p, clone_flags);
 	uprobe_copy_process(p, clone_flags);
+
+#ifdef CONFIG_UNISERVER_CAVE
+	cave_set_task(p);
+#endif
 
 	return p;
 
