@@ -12,8 +12,8 @@
 #define NOMINAL_VOLTAGE	4000
 #define KERNEL_VOLTAGE	(NOMINAL_VOLTAGE - 100)
 
-#define TO_VOFFSET_DATA(val)	(val ? ((0x1000ULL - 2 * (u64)(val)) << 20) : 0)
-#define TO_VOFFSET_VAL(data)    ((0x1000ULL - ((data) >> 20)) / 2)
+#define TO_VOFFSET_DATA(val)	(val ? (0x800ULL - (u64)val) << 21 : 0ULL)
+#define TO_VOFFSET_VAL(data)    (data ? (0x800ULL - ((u64)data >> 21)) : 0ULL)
 
 #define CORE_VOFFSET_VAL(val)		(0x8000001100000000ULL | TO_VOFFSET_DATA(val))
 #define CACHE_VOFFSET_VAL(val)		(0x8000021100000000ULL | TO_VOFFSET_DATA(val))
@@ -38,6 +38,7 @@ static atomic_long_t effective_voltage = ATOMIC_LONG_INIT(0);
 
 static inline void write_voffset(u64 voffset)
 {
+  pr_warn("cave: CORE_VOFFSET_VAL(%llu) = 0x%llx\n", voffset, CORE_VOFFSET_VAL(voffset));
 #ifdef CONFIG_UNISERVER_CAVE_TEST_MODE
 	udelay(155);
 	atomic_long_set(&effective_voltage, NOMINAL_VOLTAGE - voffset);
@@ -53,18 +54,18 @@ static inline u64 read_voffset(void)
 #ifdef CONFIG_UNISERVER_CAVE_TEST_MODE
 	return NOMINAL_VOLTAGE - (u64)atomic_long_read(&effective_voltage);
 #else
-	u64 voltage;
+	u64 voffset;
 
 	wrmsrl(0x150, 0x8000001000000000);
-	rdmsrl(0x150, voltage);
+	rdmsrl(0x150, voffset);
 
-	return TO_VOFFSET_VAL(voltage);
+	return TO_VOFFSET_VAL(voffset);
 #endif
 }
 
 static void write_voltage(long new_voltage)
 {
-	if (new_voltage > NOMINAL_VOLTAGE)
+	if (new_voltage < 0 || new_voltage > NOMINAL_VOLTAGE)
 		return;
 
 	write_voffset(NOMINAL_VOLTAGE - new_voltage);
@@ -96,7 +97,7 @@ static long select_voltage(long prev_vmin)
 	}
 
 	if (new_vmin == prev_vmin) {
-		new_vmin = 0;
+		new_vmin = -1;
 		atomic_long_inc(&cave_stat.skip);
 	}
 	else if (new_vmin > prev_vmin)
