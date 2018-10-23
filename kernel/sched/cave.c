@@ -40,7 +40,6 @@ static atomic_long_t effective_voltage = ATOMIC_LONG_INIT(0);
 
 static inline void write_voffset(u64 voffset)
 {
-	pr_warn("cave: CORE_VOFFSET_VAL(%llu) = 0x%llx\n", voffset, CORE_VOFFSET_VAL(voffset));
 #ifdef CONFIG_UNISERVER_CAVE_TEST_MODE
 	udelay(155);
 	atomic_long_set(&effective_voltage, NOMINAL_VOLTAGE - voffset);
