@@ -21,16 +21,18 @@
 struct cave_stat {
 	atomic_long_t inc;
 	atomic_long_t dec;
-	atomic_long_t skip;
+	atomic_long_t skip_fast;
+	atomic_long_t skip_slow;
 	atomic_long_t locked;
 };
+
+#define KERNEL_CONTEXT (cave_data_t){ .voltage = KERNEL_VOLTAGE }
+#define NOMINAL_CONTEXT	(cave_data_t){ .voltage = NOMINAL_VOLTAGE }
 
 static volatile int cave_enabled = 0;
 static DEFINE_SPINLOCK(cave_lock);
 DEFINE_PER_CPU(cave_data_t, context);
-static cave_data_t kernel_context = { .voltage = KERNEL_VOLTAGE };
 static struct cave_stat cave_stat;
-static struct kobject *cave_kobj;
 
 #ifdef CONFIG_UNISERVER_CAVE_TEST_MODE
 static atomic_long_t effective_voltage = ATOMIC_LONG_INIT(0);
@@ -38,7 +40,7 @@ static atomic_long_t effective_voltage = ATOMIC_LONG_INIT(0);
 
 static inline void write_voffset(u64 voffset)
 {
-  pr_warn("cave: CORE_VOFFSET_VAL(%llu) = 0x%llx\n", voffset, CORE_VOFFSET_VAL(voffset));
+	pr_warn("cave: CORE_VOFFSET_VAL(%llu) = 0x%llx\n", voffset, CORE_VOFFSET_VAL(voffset));
 #ifdef CONFIG_UNISERVER_CAVE_TEST_MODE
 	udelay(155);
 	atomic_long_set(&effective_voltage, NOMINAL_VOLTAGE - voffset);
@@ -85,10 +87,19 @@ static void wait_voltage(long new_voltage)
 		cpu_relax();
 }
 
-static long select_voltage(long prev_vmin)
+static long select_voltage(long prev_vmin, cave_data_t my_context)
 {
-	long new_vmin = 0;
+	long new_vmin = my_context.voltage;
 	int i;
+
+	if (new_vmin == prev_vmin) {
+		atomic_long_inc(&cave_stat.skip_fast);
+		return -1;
+	}
+	else if (new_vmin > prev_vmin) {
+		atomic_long_inc(&cave_stat.inc);
+		return new_vmin;
+	}
 
 	for_each_possible_cpu(i) {
 		cave_data_t tmp = per_cpu(context, i);
@@ -98,12 +109,12 @@ static long select_voltage(long prev_vmin)
 
 	if (new_vmin == prev_vmin) {
 		new_vmin = -1;
-		atomic_long_inc(&cave_stat.skip);
+		atomic_long_inc(&cave_stat.skip_slow);
 	}
-	else if (new_vmin > prev_vmin)
-		atomic_long_inc(&cave_stat.inc);
-	else
+	else if (new_vmin < prev_vmin)
 		atomic_long_inc(&cave_stat.dec);
+	else
+		WARN_ON(1);
 
 	return new_vmin;
 }
@@ -127,7 +138,7 @@ static void _cave_switch(cave_data_t new_context)
 
 	this_cpu_write(context, new_context);
 	prev_vmin = read_voltage();
-	new_vmin = select_voltage(prev_vmin);
+	new_vmin = select_voltage(prev_vmin, new_context);
 	write_voltage(new_vmin);
 
 	spin_unlock_irqrestore(&cave_lock, flags);
@@ -138,7 +149,7 @@ static void _cave_switch(cave_data_t new_context)
 
 __visible void cave_entry_switch(void)
 {
-	_cave_switch(kernel_context);
+	_cave_switch(KERNEL_CONTEXT);
 }
 
 __visible void cave_exit_switch(void)
@@ -162,9 +173,10 @@ void print_cave(struct seq_file *p)
 {
 	long inc = atomic_long_read(&cave_stat.inc);
 	long dec = atomic_long_read(&cave_stat.dec);
-	long skip = atomic_long_read(&cave_stat.skip);
+	long skip_fast = atomic_long_read(&cave_stat.skip_fast);
+	long skip_slow = atomic_long_read(&cave_stat.skip_slow);
 	long locked = atomic_long_read(&cave_stat.locked);
-	long total = inc + dec + skip;
+	long total = inc + dec + skip_fast + skip_slow;
 
 #ifdef CONFIG_UNISERVER_CAVE_TEST_MODE
 	long veff = atomic_long_read(&effective_voltage);
@@ -176,10 +188,17 @@ void print_cave(struct seq_file *p)
 		total = 100;
 
 	seq_printf(p, "\n");
-	seq_printf(p, "cave: locked %ld %%\n", 100 * locked / total);
-	seq_printf(p, "cave: vmin: %ld voff: %3ld\n", veff, NOMINAL_VOLTAGE - veff);
-	seq_printf(p, "cave: inc %ld %%, dec %ld %%, skip %ld %%\n",
-			100 * inc / total, 100 * dec / total, 100 * skip / total);
+	seq_printf(p, "cave: vmin: %ld voff: %3ld\n",
+			veff, NOMINAL_VOLTAGE - veff);
+	seq_printf(p, "cave: locked %ld %%\n",
+			100 * locked / total);
+	seq_printf(p, "cave: inc %ld %%, dec %ld %%\n",
+			100 * inc / total,
+			100 * dec / total);
+	seq_printf(p, "cave: skip %ld %% (fast %ld %%, slow %ld %%)\n",
+			100 * (skip_fast + skip_slow) / total,
+			100 * skip_fast / total,
+			100 * skip_slow / total);
 }
 
 /* sysfs interface */
@@ -213,13 +232,12 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 
 KERNEL_ATTR_RW(enable);
 
-static struct attribute * attrs[] = {
-               &enable_attr.attr,
-               NULL
-};
-
 static struct attribute_group attr_group = {
-       .attrs = attrs,
+	.name = "cave",
+	.attrs = (struct attribute * []) {
+		&enable_attr.attr,
+		NULL
+	}
 };
 
 int cave_init(void)
@@ -227,24 +245,17 @@ int cave_init(void)
 	int i;
 	int err;
 	long voltage;
-	cave_data_t nominal = { .voltage = NOMINAL_VOLTAGE };
 
 	for_each_possible_cpu(i) {
-		per_cpu(context, i) = nominal;
-		idle_task(i)->cave_data = kernel_context;
+		per_cpu(context, i) = KERNEL_CONTEXT;
+		idle_task(i)->cave_data = KERNEL_CONTEXT;
 	}
 
 #ifdef CONFIG_UNISERVER_CAVE_TEST_MODE
 	atomic_long_set(&effective_voltage, NOMINAL_VOLTAGE);
 #endif
 
-	cave_kobj = kobject_create_and_add("cave", kernel_kobj);
-	if (!cave_kobj) {
-		pr_err("cave: failed");
-		return -ENOMEM;
-	}
-
-        err = sysfs_create_group(cave_kobj, &attr_group);
+        err = sysfs_create_group(kernel_kobj, &attr_group);
         if (err) {
                 pr_err("cave: failed\n");
                 return err;
