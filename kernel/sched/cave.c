@@ -4,10 +4,12 @@
 #include <asm-generic/delay.h>
 #include <linux/sched.h>
 #include <linux/seq_file.h>
+#include <linux/kobject.h>
+#include <linux/sysfs.h>
 #include <linux/random.h>
 #include <linux/cave.h>
 
-#define NOMINAL_VOLTAGE	0x1000
+#define NOMINAL_VOLTAGE	0x800
 #define KERNEL_VOLTAGE	(NOMINAL_VOLTAGE - 100)
 
 #define TO_VOFFSET_DATA(val)	((0x1000ULL - 2 * (u64)(val)) << 20)
@@ -28,6 +30,7 @@ static DEFINE_SPINLOCK(cave_lock);
 DEFINE_PER_CPU(cave_data_t, context);
 static cave_data_t kernel_context = { .voltage = KERNEL_VOLTAGE };
 static struct cave_stat cave_stat;
+static struct kobject *cave_kobj;
 
 #ifdef CONFIG_UNISERVER_CAVE_TEST_MODE
 static atomic_long_t effective_voltage = ATOMIC_LONG_INIT(0);
@@ -75,6 +78,8 @@ static long read_voltage(void)
 
 static void wait_voltage(long new_voltage)
 {
+	udelay(155);
+	return;
 	while(new_voltage > read_voltage())
 		cpu_relax();
 }
@@ -166,6 +171,9 @@ void print_cave(struct seq_file *p)
 	long veff = read_voltage();
 #endif
 
+	if (!total)
+		total = 100;
+
 	seq_printf(p, "\n");
 	seq_printf(p, "cave: locked %ld %%\n", 100 * locked / total);
 	seq_printf(p, "cave: vmin: %ld voff: %3ld\n", veff, NOMINAL_VOLTAGE - veff);
@@ -173,9 +181,50 @@ void print_cave(struct seq_file *p)
 			100 * inc / total, 100 * dec / total, 100 * skip / total);
 }
 
+/* sysfs interface */
+#define KERNEL_ATTR_RW(_name) \
+static struct kobj_attribute _name##_attr = \
+       __ATTR(_name, 0644, _name##_show, _name##_store)
+
+ssize_t enable_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	int ret = 0;
+
+	ret += sprintf(buf, "%d\n", cave_enabled);
+
+	return ret;
+}
+
+ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
+	               const char *buf, size_t count)
+{
+	if (strncmp(buf, "1", 1) == 0) {
+		cave_enabled = 1;
+		printk(KERN_WARNING "cave: enabled\n");
+	}
+	else {
+		cave_enabled = 0;
+		printk(KERN_WARNING "cave: disabled\n");
+	}
+
+	return count;
+}
+
+KERNEL_ATTR_RW(enable);
+
+static struct attribute * attrs[] = {
+               &enable_attr.attr,
+               NULL
+};
+
+static struct attribute_group attr_group = {
+       .attrs = attrs,
+};
+
 int cave_init(void)
 {
 	int i;
+        int err;
 	cave_data_t nominal = { .voltage = NOMINAL_VOLTAGE };
 
 	for_each_possible_cpu(i) {
@@ -186,9 +235,18 @@ int cave_init(void)
 #ifdef CONFIG_UNISERVER_CAVE_TEST_MODE
 	atomic_long_set(&effective_voltage, NOMINAL_VOLTAGE);
 #endif
-	cave_enabled = 1;
 
-	printk(KERN_WARNING "cave: enabled\n");
+	cave_kobj = kobject_create_and_add("cave", kernel_kobj);
+	if (!cave_kobj) {
+		pr_err("cave: failed");
+		return -ENOMEM;
+	}
+
+        err = sysfs_create_group(cave_kobj, &attr_group);
+        if (err) {
+                pr_err("cave: failed\n");
+                return err;
+        }
 
 	return 0;
 }
