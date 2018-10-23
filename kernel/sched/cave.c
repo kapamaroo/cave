@@ -9,10 +9,10 @@
 #include <linux/random.h>
 #include <linux/cave.h>
 
-#define NOMINAL_VOLTAGE	0x800
+#define NOMINAL_VOLTAGE	4000
 #define KERNEL_VOLTAGE	(NOMINAL_VOLTAGE - 100)
 
-#define TO_VOFFSET_DATA(val)	((0x1000ULL - 2 * (u64)(val)) << 20)
+#define TO_VOFFSET_DATA(val)	(val ? ((0x1000ULL - 2 * (u64)(val)) << 20) : 0)
 #define TO_VOFFSET_VAL(data)    ((0x1000ULL - ((data) >> 20)) / 2)
 
 #define CORE_VOFFSET_VAL(val)		(0x8000001100000000ULL | TO_VOFFSET_DATA(val))
@@ -64,7 +64,7 @@ static inline u64 read_voffset(void)
 
 static void write_voltage(long new_voltage)
 {
-	if(!new_voltage)
+	if (new_voltage > NOMINAL_VOLTAGE)
 		return;
 
 	write_voffset(NOMINAL_VOLTAGE - new_voltage);
@@ -224,7 +224,8 @@ static struct attribute_group attr_group = {
 int cave_init(void)
 {
 	int i;
-        int err;
+	int err;
+	long voltage;
 	cave_data_t nominal = { .voltage = NOMINAL_VOLTAGE };
 
 	for_each_possible_cpu(i) {
@@ -247,6 +248,9 @@ int cave_init(void)
                 pr_err("cave: failed\n");
                 return err;
         }
+
+        voltage = read_voltage();
+        pr_warn("cave: nominal voltage: %ld - %ld\n", voltage, NOMINAL_VOLTAGE - voltage);
 
 	return 0;
 }
