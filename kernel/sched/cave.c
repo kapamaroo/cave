@@ -9,8 +9,11 @@
 #include <linux/random.h>
 #include <linux/cave.h>
 
-#define NOMINAL_VOLTAGE	4000
-#define KERNEL_VOLTAGE	(NOMINAL_VOLTAGE - 100)
+#define NOMINAL_VOLTAGE	4000ULL
+#define VOFFSET_OF(voltage)	((long)NOMINAL_VOLTAGE - (long)(voltage))
+#define VOLTAGE_OF(voffset)	((long)NOMINAL_VOLTAGE - (long)(voffset))
+
+#define KERNEL_VOLTAGE	(NOMINAL_VOLTAGE - 111)
 
 #define TO_VOFFSET_DATA(val)	(val ? (0x800ULL - (u64)val) << 21 : 0ULL)
 #define TO_VOFFSET_VAL(data)    (data ? (0x800ULL - ((u64)data >> 21)) : 0ULL)
@@ -18,12 +21,26 @@
 #define CORE_VOFFSET_VAL(val)		(0x8000001100000000ULL | TO_VOFFSET_DATA(val))
 #define CACHE_VOFFSET_VAL(val)		(0x8000021100000000ULL | TO_VOFFSET_DATA(val))
 
+#if 0
+typedef atomic_long_t stat_cnt_t;
+#define STAT_INC(x)	atomic_long_inc(&(x))
+#define STAT_READ(x)	atomic_long_read(&(x))
+#define STAT_INIT(val)	ATOMIC_LONG_INIT(val)
+#define STAT_SET(x, v)	atomic_long_set(&x, v)
+#else
+typedef long stat_cnt_t;
+#define STAT_INC(x)	(x)++
+#define STAT_READ(x)	(x)
+#define STAT_INIT(val)	(val)
+#define STAT_SET(x, v)	x = v
+#endif
+
 struct cave_stat {
-	atomic_long_t inc;
-	atomic_long_t dec;
-	atomic_long_t skip_fast;
-	atomic_long_t skip_slow;
-	atomic_long_t locked;
+	stat_cnt_t inc;
+	stat_cnt_t dec;
+	stat_cnt_t skip_fast;
+	stat_cnt_t skip_slow;
+	stat_cnt_t locked;
 };
 
 #define KERNEL_CONTEXT (cave_data_t){ .voltage = KERNEL_VOLTAGE }
@@ -34,55 +51,59 @@ static DEFINE_SPINLOCK(cave_lock);
 DEFINE_PER_CPU(cave_data_t, context);
 static struct cave_stat cave_stat;
 
-#ifdef CONFIG_UNISERVER_CAVE_TEST_MODE
-static atomic_long_t effective_voltage = ATOMIC_LONG_INIT(0);
-#endif
+static stat_cnt_t effective_voltage = STAT_INIT(NOMINAL_VOLTAGE);
 
-static inline void write_voffset(u64 voffset)
+static inline void write_voffset_msr(u64 voffset)
 {
-#ifdef CONFIG_UNISERVER_CAVE_TEST_MODE
-	udelay(155);
-	atomic_long_set(&effective_voltage, NOMINAL_VOLTAGE - voffset);
-	return;
-#else
 	wrmsrl(0x150, CORE_VOFFSET_VAL(voffset));
 	wrmsrl(0x150, CACHE_VOFFSET_VAL(voffset));
-#endif
 }
 
-static inline u64 read_voffset(void)
+static inline u64 read_voffset_msr(void)
 {
-#ifdef CONFIG_UNISERVER_CAVE_TEST_MODE
-	return NOMINAL_VOLTAGE - (u64)atomic_long_read(&effective_voltage);
-#else
 	u64 voffset;
 
 	wrmsrl(0x150, 0x8000001000000000);
 	rdmsrl(0x150, voffset);
 
 	return TO_VOFFSET_VAL(voffset);
-#endif
 }
 
-static void write_voltage(long new_voltage)
+static void write_voltage_cached(long new_voltage)
 {
-	if (new_voltage < 0 || new_voltage > NOMINAL_VOLTAGE)
+	if (unlikely(new_voltage < 0 || new_voltage > NOMINAL_VOLTAGE))
 		return;
 
-	write_voffset(NOMINAL_VOLTAGE - new_voltage);
+	STAT_SET(effective_voltage, new_voltage);
 }
 
-static long read_voltage(void)
+static void write_voltage_msr(long new_voltage)
 {
-	long voffset = read_voffset();
-	return NOMINAL_VOLTAGE - voffset;
+	if (unlikely(new_voltage < 0 || new_voltage > NOMINAL_VOLTAGE))
+		return;
+
+	if (unlikely(new_voltage != STAT_READ(effective_voltage))) {
+		WARN_ON(1);
+		STAT_SET(effective_voltage, new_voltage);
+	}
+
+	write_voffset_msr(VOFFSET_OF(new_voltage));
+}
+
+static long read_voltage_cached(void)
+{
+	return STAT_READ(effective_voltage);
+}
+
+static long read_voltage_msr(void)
+{
+	long voffset = read_voffset_msr();
+	return VOLTAGE_OF(voffset);
 }
 
 static void wait_voltage(long new_voltage)
 {
-	udelay(155);
-	return;
-	while(new_voltage > read_voltage())
+	while(new_voltage > read_voltage_msr())
 		cpu_relax();
 }
 
@@ -92,11 +113,11 @@ static long select_voltage(long prev_vmin, cave_data_t my_context)
 	int i;
 
 	if (new_vmin == prev_vmin) {
-		atomic_long_inc(&cave_stat.skip_fast);
+		STAT_INC(cave_stat.skip_fast);
 		return -1;
 	}
 	else if (new_vmin > prev_vmin) {
-		atomic_long_inc(&cave_stat.inc);
+		STAT_INC(cave_stat.inc);
 		return new_vmin;
 	}
 
@@ -108,10 +129,10 @@ static long select_voltage(long prev_vmin, cave_data_t my_context)
 
 	if (new_vmin == prev_vmin) {
 		new_vmin = -1;
-		atomic_long_inc(&cave_stat.skip_slow);
+		STAT_INC(cave_stat.skip_slow);
 	}
 	else if (new_vmin < prev_vmin)
-		atomic_long_inc(&cave_stat.dec);
+		STAT_INC(cave_stat.dec);
 	else
 		WARN_ON(1);
 
@@ -130,18 +151,19 @@ static void _cave_switch(cave_data_t new_context)
 
 	while (!spin_trylock_irqsave(&cave_lock, flags)) {
 		if (!done) {
-			atomic_long_inc(&cave_stat.locked);
+			STAT_INC(cave_stat.locked);
 			done = true;
 		}
 	}
 
 	this_cpu_write(context, new_context);
-	prev_vmin = read_voltage();
+	prev_vmin = read_voltage_cached();
 	new_vmin = select_voltage(prev_vmin, new_context);
-	write_voltage(new_vmin);
+	write_voltage_cached(new_vmin);
 
 	spin_unlock_irqrestore(&cave_lock, flags);
 
+	write_voltage_msr(new_vmin);
 	if(new_vmin > prev_vmin)
 		wait_voltage(new_vmin);
 }
@@ -158,37 +180,33 @@ __visible void cave_exit_switch(void)
 
 void cave_set_task(struct task_struct *p)
 {
-	p->cave_data.voltage = NOMINAL_VOLTAGE - (get_random_long() % 250);
+	p->cave_data.voltage = VOLTAGE_OF((get_random_long() % 250));
 
 	/*
 	if (cave_enabled)
 		printk(KERN_WARNING "cave: pid %d vmin: %ld voff: %3ld\n",
-				task_tgid_vnr(p), p->cave_data,
-				NOMINAL_VOLTAGE - p->cave_data);
+				task_tgid_vnr(p), p->cave_data.voltage,
+				VOFFSET_OF(p->cave_data.voltage));
 	 */
 }
 
 void print_cave(struct seq_file *p)
 {
-	long inc = atomic_long_read(&cave_stat.inc);
-	long dec = atomic_long_read(&cave_stat.dec);
-	long skip_fast = atomic_long_read(&cave_stat.skip_fast);
-	long skip_slow = atomic_long_read(&cave_stat.skip_slow);
-	long locked = atomic_long_read(&cave_stat.locked);
+	long inc = STAT_READ(cave_stat.inc);
+	long dec = STAT_READ(cave_stat.dec);
+	long skip_fast = STAT_READ(cave_stat.skip_fast);
+	long skip_slow = STAT_READ(cave_stat.skip_slow);
+	long locked = STAT_READ(cave_stat.locked);
 	long total = inc + dec + skip_fast + skip_slow;
 
-#ifdef CONFIG_UNISERVER_CAVE_TEST_MODE
-	long veff = atomic_long_read(&effective_voltage);
-#else
-	long veff = read_voltage();
-#endif
+	long veff = read_voltage_cached();
 
 	if (!total)
 		total = 100;
 
 	seq_printf(p, "\n");
 	seq_printf(p, "cave: vmin: %ld voff: %3ld\n",
-			veff, NOMINAL_VOLTAGE - veff);
+			veff, VOFFSET_OF(veff));
 	seq_printf(p, "cave: locked %ld %%\n",
 			100 * locked / total);
 	seq_printf(p, "cave: inc %ld %%, dec %ld %%\n",
@@ -245,23 +263,20 @@ int cave_init(void)
 	int err;
 	long voltage;
 
-	for_each_possible_cpu(i) {
-		per_cpu(context, i) = KERNEL_CONTEXT;
-		idle_task(i)->cave_data = KERNEL_CONTEXT;
-	}
-
-#ifdef CONFIG_UNISERVER_CAVE_TEST_MODE
-	atomic_long_set(&effective_voltage, NOMINAL_VOLTAGE);
-#endif
-
         err = sysfs_create_group(kernel_kobj, &attr_group);
         if (err) {
                 pr_err("cave: failed\n");
                 return err;
         }
 
-        voltage = read_voltage();
-        pr_warn("cave: nominal voltage: %ld - %ld\n", voltage, NOMINAL_VOLTAGE - voltage);
+	for_each_possible_cpu(i) {
+		per_cpu(context, i) = KERNEL_CONTEXT;
+		idle_task(i)->cave_data = KERNEL_CONTEXT;
+	}
+
+        voltage = read_voltage_msr();
+
+        pr_warn("cave: msr voltage: %ld offset: %ld\n", voltage, VOFFSET_OF(voltage));
 
 	return 0;
 }
