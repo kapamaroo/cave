@@ -496,6 +496,11 @@ ssize_t kernel_vmin_store(struct kobject *kobj, struct kobj_attribute *attr,
 		return count;
 	}
 
+	if (val > cave_max_vmin) {
+		pr_warn("cave: kernel_vmin out of range\n");
+		return count;
+	}
+
 	spin_lock_irqsave(&cave_lock, flags);
 	cave_kernel_vmin = val;
 	for_each_possible_cpu(i)
