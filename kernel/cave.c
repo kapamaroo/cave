@@ -222,16 +222,29 @@ __visible void cave_exit_switch(void)
 	_cave_switch(current->cave_data);
 }
 
+static void __cave_set_task(struct task_struct *p, long voffset)
+{
+	p->cave_data.voltage = VOLTAGE_OF(voffset);
+}
+
+static void _cave_set_task(struct task_struct *p, long voffset)
+{
+	if (voffset < 0 || voffset > cave_max_vmin) {
+		pr_warn("cave: voffset out of range (%ld) comm=%s\n", voffset, p->comm);
+		voffset = 0;
+	}
+
+	__cave_set_task(p, voffset);
+}
+
 void cave_set_task(struct task_struct *p)
 {
-	p->cave_data.voltage = VOLTAGE_OF((get_random_long() % 250));
+	unsigned long voffset = 0;
 
-	/*
-	if (cave_enabled)
-		printk(KERN_WARNING "cave: pid %d vmin: %ld voff: %3ld\n",
-				task_tgid_vnr(p), p->cave_data.voltage,
-				-VOFFSET_OF(p->cave_data.voltage));
-	 */
+	if (cave_random_vmin_enabled)
+		voffset = get_random_long() % cave_max_vmin;
+
+	__cave_set_task(p, voffset);
 }
 
 #define FSHIFT	11
