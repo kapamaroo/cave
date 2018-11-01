@@ -736,6 +736,18 @@ __SYSCALL(__NR_statx,     sys_statx)
 #undef __NR_syscalls
 #define __NR_syscalls 292
 
+#ifdef CONFIG_UNISERVER_CAVE
+#if 400 < __NR_syscalls
+#error update uniserver system call numbers!
+#endif
+
+#define __NR_uniserver_ctl 400
+__SYSCALL(__NR_uniserver_ctl, sys_uniserver_ctl)
+
+#undef __NR_syscalls
+#define __NR_syscalls 401
+#endif
+
 /*
  * All syscalls below here should go away really,
  * these are provided for both review and as a porting

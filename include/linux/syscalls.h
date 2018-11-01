@@ -897,6 +897,10 @@ asmlinkage long sys_copy_file_range(int fd_in, loff_t __user *off_in,
 				    int fd_out, loff_t __user *off_out,
 				    size_t len, unsigned int flags);
 
+#ifdef CONFIG_UNISERVER_CAVE
+asmlinkage long sys_uniserver_ctl(int action, int op1, int op2);
+#endif
+
 asmlinkage long sys_mlock2(unsigned long start, size_t len, int flags);
 
 asmlinkage long sys_pkey_mprotect(unsigned long start, size_t len,

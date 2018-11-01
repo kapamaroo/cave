@@ -9,6 +9,7 @@
 #include <linux/random.h>
 #include <linux/cave.h>
 #include <linux/hrtimer.h>
+#include <linux/syscalls.h>
 
 #define NOMINAL_VOLTAGE	4000ULL
 #define VOFFSET_OF(voltage)	((long)NOMINAL_VOLTAGE - (long)(voltage))
@@ -507,3 +508,7 @@ int cave_init(void)
 	return 0;
 }
 late_initcall(cave_init);
+SYSCALL_DEFINE3(uniserver_ctl, int, action, int, op1, int, op2)
+{
+	return -1;
+}
