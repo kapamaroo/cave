@@ -609,7 +609,21 @@ int cave_init(void)
 	return 0;
 }
 late_initcall(cave_init);
+
+#define CAVE_SET_TASK_VOFFSET	128
+
 SYSCALL_DEFINE3(uniserver_ctl, int, action, int, op1, int, op2)
 {
+	struct task_struct *p = current;
+
+	switch (action) {
+	case CAVE_SET_TASK_VOFFSET:
+		_cave_set_task(p, op2);
+		printk(KERN_WARNING "cave: pid %d vmin: %ld voff: %3ld\n",
+		       task_tgid_vnr(p), p->cave_data.voltage,
+		       -VOFFSET_OF(p->cave_data.voltage));
+		return 0;
+	}
+
 	return -1;
 }
