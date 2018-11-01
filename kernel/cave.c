@@ -247,12 +247,11 @@ static void _cave_set_task(struct task_struct *p, long voffset)
 
 void cave_set_task(struct task_struct *p)
 {
-	unsigned long voffset = 0;
-
-	if (cave_random_vmin_enabled)
+	if (cave_random_vmin_enabled) {
+		unsigned long voffset = 0;
 		voffset = get_random_long() % cave_max_vmin;
-
-	__cave_set_task(p, voffset);
+		__cave_set_task(p, voffset);
+	}
 }
 
 #define FSHIFT	11
