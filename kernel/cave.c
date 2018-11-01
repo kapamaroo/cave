@@ -11,11 +11,15 @@
 #include <linux/hrtimer.h>
 #include <linux/syscalls.h>
 
-#define NOMINAL_VOLTAGE	4000ULL
-#define VOFFSET_OF(voltage)	((long)NOMINAL_VOLTAGE - (long)(voltage))
-#define VOLTAGE_OF(voffset)	((long)NOMINAL_VOLTAGE - (long)(voffset))
+#define CAVE_NOMINAL_VOLTAGE		4000ULL
+#define CAVE_DEFAULT_MAX_VOFFSET	 250ULL
+#define CAVE_DEFAULT_KERNEL_VOFFSET	 111ULL
 
-#define KERNEL_VOLTAGE	(NOMINAL_VOLTAGE - 111)
+#define CAVE_DEFAULT_MAX_VMIN		VOLTAGE_OF(CAVE_DEFAULT_MAX_VOFFSET)
+#define CAVE_DEFAULT_KERNEL_VMIN	VOLTAGE_OF(CAVE_DEFAULT_KERNEL_VOFFSET)
+
+#define VOFFSET_OF(voltage)	((long)CAVE_NOMINAL_VOLTAGE - (long)(voltage))
+#define VOLTAGE_OF(voffset)	((long)CAVE_NOMINAL_VOLTAGE - (long)(voffset))
 
 #define TO_VOFFSET_DATA(val)	(val ? (0x800ULL - (u64)val) << 21 : 0ULL)
 #define TO_VOFFSET_VAL(data)    (data ? (0x800ULL - ((u64)data >> 21)) : 0ULL)
@@ -33,14 +37,17 @@ struct cave_stat {
 	long total;
 };
 
-#define KERNEL_CONTEXT (cave_data_t){ .voltage = KERNEL_VOLTAGE }
-#define NOMINAL_CONTEXT	(cave_data_t){ .voltage = NOMINAL_VOLTAGE }
-
 static volatile int cave_enabled = 0;
 static DEFINE_SPINLOCK(cave_lock);
 DEFINE_PER_CPU(cave_data_t, context);
+static volatile int cave_random_vmin_enabled __read_mostly = 0;
+static volatile int cave_kernel_vmin __read_mostly = CAVE_DEFAULT_KERNEL_VMIN;
+static volatile int cave_max_vmin __read_mostly = CAVE_DEFAULT_MAX_VMIN;
 
-static volatile long effective_voltage = NOMINAL_VOLTAGE;
+static volatile long effective_voltage = CAVE_NOMINAL_VOLTAGE;
+
+#define CAVE_KERNEL_CONTEXT (cave_data_t){ .voltage = cave_kernel_vmin }
+#define CAVE_NOMINAL_CONTEXT	(cave_data_t){ .voltage = CAVE_NOMINAL_VOLTAGE }
 
 static struct cave_stat cave_stat;
 static struct cave_stat cave_stat_avg[3];
@@ -112,7 +119,7 @@ static inline u64 read_voffset_msr(void)
 
 static void write_voltage_cached(long new_voltage)
 {
-	if (unlikely(new_voltage < 0 || new_voltage > NOMINAL_VOLTAGE))
+	if (unlikely(new_voltage < 0 || new_voltage > CAVE_NOMINAL_VOLTAGE))
 		return;
 
 	effective_voltage = new_voltage;
@@ -120,7 +127,7 @@ static void write_voltage_cached(long new_voltage)
 
 static void write_voltage_msr(long new_voltage)
 {
-	if (unlikely(new_voltage < 0 || new_voltage > NOMINAL_VOLTAGE))
+	if (unlikely(new_voltage < 0 || new_voltage > CAVE_NOMINAL_VOLTAGE))
 		return;
 
 	if (unlikely(new_voltage != effective_voltage)) {
@@ -215,7 +222,7 @@ static void _cave_switch(cave_data_t new_context)
 
 __visible void cave_entry_switch(void)
 {
-	_cave_switch(KERNEL_CONTEXT);
+	_cave_switch(CAVE_KERNEL_CONTEXT);
 }
 
 __visible void cave_exit_switch(void)
@@ -402,11 +409,99 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 			memset(&cave_stat, 0, sizeof(struct cave_stat));
 			memset(cave_stat_avg, 0, sizeof(cave_stat_avg));
 		}
-		write_voltage_cached(NOMINAL_VOLTAGE);
-		write_voltage_msr(NOMINAL_VOLTAGE);
+		write_voltage_cached(CAVE_NOMINAL_VOLTAGE);
+		write_voltage_msr(CAVE_NOMINAL_VOLTAGE);
 		spin_unlock_irqrestore(&cave_lock, flags);
 		printk(KERN_WARNING "cave: disabled\n");
 	}
+
+	return count;
+}
+
+static
+ssize_t random_vmin_enable_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	int ret = 0;
+
+	ret += sprintf(buf, "%d\n", cave_random_vmin_enabled);
+
+	return ret;
+}
+
+static
+ssize_t random_vmin_enable_store(struct kobject *kobj, struct kobj_attribute *attr,
+				 const char *buf, size_t count)
+{
+	if (strncmp(buf, "1", 1) == 0) {
+		if (!cave_random_vmin_enabled)
+			cave_random_vmin_enabled = 1;
+	}
+	else {
+		if (cave_random_vmin_enabled)
+			cave_random_vmin_enabled = 0;
+	}
+
+	return count;
+}
+
+static
+ssize_t max_vmin_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	int ret = 0;
+
+	ret += sprintf(buf, "%d\n", cave_max_vmin);
+
+	return ret;
+}
+
+static
+ssize_t max_vmin_store(struct kobject *kobj, struct kobj_attribute *attr,
+		       const char *buf, size_t count)
+{
+	int val;
+	int err;
+
+	err = kstrtouint(buf, 10, &val);
+	if (err) {
+		pr_warn("cave: invalid max_vmin value\n");
+		return count;
+	}
+
+	cave_max_vmin = val;
+
+	return count;
+}
+
+static
+ssize_t kernel_vmin_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	int ret = 0;
+
+	ret += sprintf(buf, "%d\n", cave_kernel_vmin);
+
+	return ret;
+}
+
+static
+ssize_t kernel_vmin_store(struct kobject *kobj, struct kobj_attribute *attr,
+			  const char *buf, size_t count)
+{
+	unsigned long flags;
+	int val;
+	int err;
+	int i;
+
+	err = kstrtouint(buf, 10, &val);
+	if (err) {
+		pr_warn("cave: invalid kernel_vmin value\n");
+		return count;
+	}
+
+	spin_lock_irqsave(&cave_lock, flags);
+	cave_kernel_vmin = val;
+	for_each_possible_cpu(i)
+		idle_task(i)->cave_data = CAVE_KERNEL_CONTEXT;
+	spin_unlock_irqrestore(&cave_lock, flags);
 
 	return count;
 }
@@ -470,6 +565,9 @@ KERNEL_ATTR_RO(stats);
 KERNEL_ATTR_RO(raw_stats);
 KERNEL_ATTR_WO(reset_stats);
 KERNEL_ATTR_RO(voltage);
+KERNEL_ATTR_RW(random_vmin_enable);
+KERNEL_ATTR_RW(max_vmin);
+KERNEL_ATTR_RW(kernel_vmin);
 
 static struct attribute_group attr_group = {
 	.name = "cave",
@@ -479,6 +577,9 @@ static struct attribute_group attr_group = {
 		&stats_attr.attr,
 		&raw_stats_attr.attr,
 		&voltage_attr.attr,
+		&random_vmin_enable_attr.attr,
+		&max_vmin_attr.attr,
+		&kernel_vmin_attr.attr,
 		NULL
 	}
 };
@@ -496,8 +597,8 @@ int cave_init(void)
         }
 
 	for_each_possible_cpu(i) {
-		per_cpu(context, i) = KERNEL_CONTEXT;
-		idle_task(i)->cave_data = KERNEL_CONTEXT;
+		per_cpu(context, i) = CAVE_KERNEL_CONTEXT;
+		idle_task(i)->cave_data = CAVE_KERNEL_CONTEXT;
 	}
 
         voltage = read_voltage_msr();
