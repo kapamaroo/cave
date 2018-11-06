@@ -561,11 +561,8 @@ ssize_t reset_stats_store(struct kobject *kobj, struct kobj_attribute *attr,
 
 	spin_lock_irqsave(&cave_lock, flags);
 	if (cave_enabled) {
-		memset(&cave_stat, 0, sizeof(struct cave_stat));
-		memset(cave_stat_avg, 0, sizeof(cave_stat_avg));
-		stat_samples[0] = 1;
-		stat_samples[1] = 1;
-		stat_samples[2] = 1;
+		stats_clear();
+		stats_init();
 	}
 	spin_unlock_irqrestore(&cave_lock, flags);
 
