@@ -11,21 +11,14 @@
 #include <linux/hrtimer.h>
 #include <linux/syscalls.h>
 
-#define CAVE_NOMINAL_VOLTAGE		4000ULL
-#define CAVE_DEFAULT_MAX_VOFFSET	 250ULL
-#define CAVE_DEFAULT_KERNEL_VOFFSET	 111ULL
+#define CAVE_KERNEL_CONTEXT (cave_data_t){ .voltage = VOLTAGE_OF(cave_kernel_voffset) }
+#define CAVE_NOMINAL_CONTEXT	(cave_data_t){ .voltage = CAVE_NOMINAL_VOLTAGE }
 
-#define CAVE_DEFAULT_MAX_VMIN		VOLTAGE_OF(CAVE_DEFAULT_MAX_VOFFSET)
-#define CAVE_DEFAULT_KERNEL_VMIN	VOLTAGE_OF(CAVE_DEFAULT_KERNEL_VOFFSET)
+#define TO_VOFFSET_DATA(__val)	(__val ? (0x800ULL - (u64)__val) << 21 : 0ULL)
+#define TO_VOFFSET_VAL(__data)    (__data ? (0x800ULL - ((u64)__data >> 21)) : 0ULL)
 
-#define VOFFSET_OF(voltage)	((long)CAVE_NOMINAL_VOLTAGE - (long)(voltage))
-#define VOLTAGE_OF(voffset)	((long)CAVE_NOMINAL_VOLTAGE - (long)(voffset))
-
-#define TO_VOFFSET_DATA(val)	(val ? (0x800ULL - (u64)val) << 21 : 0ULL)
-#define TO_VOFFSET_VAL(data)    (data ? (0x800ULL - ((u64)data >> 21)) : 0ULL)
-
-#define CORE_VOFFSET_VAL(val)		(0x8000001100000000ULL | TO_VOFFSET_DATA(val))
-#define CACHE_VOFFSET_VAL(val)		(0x8000021100000000ULL | TO_VOFFSET_DATA(val))
+#define CORE_VOFFSET_VAL(__val)		(0x8000001100000000ULL | TO_VOFFSET_DATA(__val))
+#define CACHE_VOFFSET_VAL(__val)	(0x8000021100000000ULL | TO_VOFFSET_DATA(__val))
 
 struct cave_stat {
 	long inc;
@@ -41,17 +34,19 @@ static volatile int cave_enabled = 0;
 static DEFINE_SPINLOCK(cave_lock);
 DEFINE_PER_CPU(cave_data_t, context);
 static volatile int cave_random_vmin_enabled __read_mostly = 0;
-static volatile int cave_kernel_vmin __read_mostly = CAVE_DEFAULT_KERNEL_VMIN;
-static volatile int cave_max_vmin __read_mostly = CAVE_DEFAULT_MAX_VMIN;
+static volatile int cave_kernel_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
+static volatile int cave_max_voffset __read_mostly = CAVE_DEFAULT_MAX_VOFFSET;
 
 static volatile long effective_voltage = CAVE_NOMINAL_VOLTAGE;
-
-#define CAVE_KERNEL_CONTEXT (cave_data_t){ .voltage = cave_kernel_vmin }
-#define CAVE_NOMINAL_CONTEXT	(cave_data_t){ .voltage = CAVE_NOMINAL_VOLTAGE }
 
 static struct cave_stat cave_stat;
 static struct cave_stat cave_stat_avg[3];
 static int stat_samples[3] = { 1, 1, 1 };
+
+#define FSHIFT	11
+#define FIXED_1	(1 << FSHIFT)
+#define STAT_INT(x)	((x) >> FSHIFT)
+#define STAT_FRAC(x)	STAT_INT(((x) & (FIXED_1 - 1)) * 100)
 
 #define __RUNNING_AVG_STAT(d, s, n, x)		\
 	d.x = (d.x * (n - 1) + s.x) / n
@@ -72,9 +67,8 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 	unsigned long flags;
 	struct cave_stat new_stat;
 
-	WARN_ON(!cave_enabled);
-
 	spin_lock_irqsave(&cave_lock, flags);
+	WARN_ON(!cave_enabled);
 	new_stat = cave_stat;
 	memset(&cave_stat, 0, sizeof(struct cave_stat));
 	spin_unlock_irqrestore(&cave_lock, flags);
@@ -90,6 +84,12 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 
 static void stats_init(void)
 {
+	memset(&cave_stat, 0, sizeof(struct cave_stat));
+	memset(cave_stat_avg, 0, sizeof(cave_stat_avg));
+	stat_samples[0] = 1;
+	stat_samples[1] = 1;
+	stat_samples[2] = 1;
+
 	stats_period_time = ktime_set(1, 0);
 	hrtimer_init(&stats_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	stats_hrtimer.function = stats_gather;
@@ -99,6 +99,12 @@ static void stats_init(void)
 static void stats_clear(void)
 {
 	hrtimer_cancel(&stats_hrtimer);
+
+	memset(&cave_stat, 0, sizeof(struct cave_stat));
+	memset(cave_stat_avg, 0, sizeof(cave_stat_avg));
+	stat_samples[0] = 1;
+	stat_samples[1] = 1;
+	stat_samples[2] = 1;
 }
 
 static inline void write_voffset_msr(u64 voffset)
@@ -127,6 +133,8 @@ static void write_voltage_cached(long new_voltage)
 
 static void write_voltage_msr(long new_voltage)
 {
+	u64 new_voffset;
+
 	if (unlikely(new_voltage < 0 || new_voltage > CAVE_NOMINAL_VOLTAGE))
 		return;
 
@@ -135,7 +143,11 @@ static void write_voltage_msr(long new_voltage)
 		effective_voltage = new_voltage;
 	}
 
-	write_voffset_msr(VOFFSET_OF(new_voltage));
+	if (!new_voltage)
+		pr_warn("cave: pid %d (%s) fix", task_tgid_vnr(current), current->comm);
+
+	new_voffset = VOFFSET_OF(new_voltage);
+	write_voffset_msr(new_voffset);
 }
 
 static long read_voltage_cached(void)
@@ -145,12 +157,19 @@ static long read_voltage_cached(void)
 
 static long read_voltage_msr(void)
 {
-	long voffset = read_voffset_msr();
-	long voltage = VOLTAGE_OF(voffset);
+	unsigned long flags;
+	long voffset_msr, voltage_msr, voltage_cached;
 
-	WARN_ON_ONCE(voltage != effective_voltage);
+	spin_lock_irqsave(&cave_lock, flags);
+	voffset_msr = read_voffset_msr();
+	voltage_cached = effective_voltage;
+	spin_unlock_irqrestore(&cave_lock, flags);
 
-	return voltage;
+	voltage_msr = VOLTAGE_OF(voffset_msr);
+
+	WARN_ON_ONCE(cave_enabled && voltage_msr != voltage_cached);
+
+	return voltage_msr;
 }
 
 static void wait_voltage(long new_voltage)
@@ -237,7 +256,7 @@ static void __cave_set_task(struct task_struct *p, long voffset)
 
 static void _cave_set_task(struct task_struct *p, long voffset)
 {
-	if (voffset < 0 || voffset > cave_max_vmin) {
+	if (voffset < 0 || voffset > cave_max_voffset) {
 		pr_warn("cave: voffset out of range (%ld) comm=%s\n", voffset, p->comm);
 		voffset = 0;
 	}
@@ -247,17 +266,16 @@ static void _cave_set_task(struct task_struct *p, long voffset)
 
 void cave_set_task(struct task_struct *p)
 {
+	unsigned long voffset = 0;
+
+	if (p->cave_data.voltage == 0)
+		pr_warn("cave: pid %d comm=%s with no vmin", task_tgid_vnr(p), p->comm);
+
 	if (cave_random_vmin_enabled) {
-		unsigned long voffset = 0;
-		voffset = get_random_long() % cave_max_vmin;
+		voffset = get_random_long() % cave_max_voffset;
 		__cave_set_task(p, voffset);
 	}
 }
-
-#define FSHIFT	11
-#define FIXED_1	(1 << FSHIFT)
-#define STAT_INT(x)	((x) >> FSHIFT)
-#define STAT_FRAC(x)	STAT_INT(((x) & (FIXED_1 - 1)) * 100)
 
 static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 {
@@ -275,36 +293,34 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 	stat[3].total = stat[3].inc + stat[3].dec + stat[3].skip + 1;
 
 	if (raw) {
-		ret += sprintf(buf + ret, "locked %ld %ld %ld %ld\n",
-			       stat[0].locked, stat[1].locked,
-			       stat[2].locked, stat[3].locked);
-		ret += sprintf(buf + ret, "inc %ld %ld %ld %ld\n",
-			       stat[0].inc, stat[1].inc, stat[2].inc, stat[3].inc);
-		ret += sprintf(buf + ret, "dec %ld %ld %ld %ld\n",
-			       stat[0].dec, stat[1].dec, stat[2].dec, stat[3].dec);
-		ret += sprintf(buf + ret, "skip %ld %ld %ld %ld\n",
-			       stat[0].skip, stat[1].skip, stat[2].skip, stat[3].skip);
-		ret += sprintf(buf + ret, "skip_fast %ld %ld %ld %ld\n",
-			       stat[0].skip_fast, stat[1].skip_fast,
-			       stat[2].skip_fast, stat[3].skip_fast);
-		ret += sprintf(buf + ret, "skip_slow %ld %ld %ld %ld\n",
-			       stat[0].skip_slow, stat[1].skip_slow,
-			       stat[2].skip_slow, stat[3].skip_slow);
+#define S(x)		   \
+		stat[0].x, \
+		stat[1].x, \
+		stat[2].x, \
+		stat[3].x
+
+		ret += sprintf(buf + ret, "locked %ld %ld %ld %ld\n", S(locked));
+		ret += sprintf(buf + ret, "inc %ld %ld %ld %ld\n", S(inc));
+		ret += sprintf(buf + ret, "dec %ld %ld %ld %ld\n", S(dec));
+		ret += sprintf(buf + ret, "skip %ld %ld %ld %ld\n", S(skip));
+		ret += sprintf(buf + ret, "skip_fast %ld %ld %ld %ld\n", S(skip_fast));
+		ret += sprintf(buf + ret, "skip_slow %ld %ld %ld %ld\n", S(skip_slow));
+#undef S
 	}
 	else {
-#define __FIXED_STAT(d, x) d.x = (d.x << FSHIFT) / d.total
-#define FIXED_STAT(d) \
-		__FIXED_STAT(d, inc); \
-		__FIXED_STAT(d, dec); \
-		__FIXED_STAT(d, skip_fast); \
-		__FIXED_STAT(d, skip_slow); \
-		__FIXED_STAT(d, skip); \
-		__FIXED_STAT(d, locked);
+#define __FIXED_STAT(d, x, __s) d.x = 100 * (d.x << __s) / d.total
+#define FIXED_STAT(d, __s)				\
+		__FIXED_STAT(d, inc,       __s);	\
+		__FIXED_STAT(d, dec,       __s);	\
+		__FIXED_STAT(d, skip_fast, __s);	\
+		__FIXED_STAT(d, skip_slow, __s);	\
+		__FIXED_STAT(d, skip,      __s);	\
+		__FIXED_STAT(d, locked,    __s);
 
-		FIXED_STAT(stat[0]);
-		FIXED_STAT(stat[1]);
-		FIXED_STAT(stat[2]);
-		FIXED_STAT(stat[3]);
+		FIXED_STAT(stat[0], FSHIFT);
+		FIXED_STAT(stat[1], FSHIFT);
+		FIXED_STAT(stat[2], FSHIFT);
+		FIXED_STAT(stat[3], FSHIFT);
 
 #define S(x)	STAT_INT(x), STAT_FRAC(x)
 
@@ -353,7 +369,9 @@ static int print_cave_stats(char *buf, const bool raw)
 	enabled = cave_enabled;
 	if (enabled) {
 		stat[0] = cave_stat;
-		memcpy(stat + 1, cave_stat_avg, sizeof(cave_stat_avg));
+		stat[1] = cave_stat_avg[0];
+		stat[2] = cave_stat_avg[1];
+		stat[3] = cave_stat_avg[2];
 	}
 	spin_unlock_irqrestore(&cave_lock, flags);
 
@@ -388,30 +406,41 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 	               const char *buf, size_t count)
 {
 	unsigned long flags;
+	int enable;
+	int err;
+	bool show_msg = false;
 
-	if (strncmp(buf, "1", 1) == 0) {
+	err = kstrtouint(buf, 10, &enable);
+	if (err || (enable != 0 && enable != 1)) {
+		pr_warn("cave: invalid %s value\n", attr->attr.name);
+		return count;
+	}
+
+	if (enable) {
 		spin_lock_irqsave(&cave_lock, flags);
 		if (!cave_enabled) {
-			memset(&cave_stat, 0, sizeof(struct cave_stat));
-			memset(cave_stat_avg, 0, sizeof(cave_stat_avg));
+			write_voltage_cached(CAVE_NOMINAL_VOLTAGE);
+			write_voltage_msr(CAVE_NOMINAL_VOLTAGE);
+			stats_init();
 			cave_enabled = 1;
+			show_msg = true;
 		}
 		spin_unlock_irqrestore(&cave_lock, flags);
-		stats_init();
-		printk(KERN_WARNING "cave: enabled\n");
+		if (show_msg)
+			printk(KERN_WARNING "cave: enabled\n");
 	}
 	else {
-		stats_clear();
 		spin_lock_irqsave(&cave_lock, flags);
 		if (cave_enabled) {
 			cave_enabled = 0;
-			memset(&cave_stat, 0, sizeof(struct cave_stat));
-			memset(cave_stat_avg, 0, sizeof(cave_stat_avg));
+			stats_clear();
+			write_voltage_cached(CAVE_NOMINAL_VOLTAGE);
+			write_voltage_msr(CAVE_NOMINAL_VOLTAGE);
+			show_msg = true;
 		}
-		write_voltage_cached(CAVE_NOMINAL_VOLTAGE);
-		write_voltage_msr(CAVE_NOMINAL_VOLTAGE);
 		spin_unlock_irqrestore(&cave_lock, flags);
-		printk(KERN_WARNING "cave: disabled\n");
+		if (show_msg)
+			printk(KERN_WARNING "cave: disabled\n");
 	}
 
 	return count;
@@ -431,7 +460,16 @@ static
 ssize_t random_vmin_enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 				 const char *buf, size_t count)
 {
-	if (strncmp(buf, "1", 1) == 0) {
+	int enable;
+	int err;
+
+	err = kstrtouint(buf, 10, &enable);
+	if (err || (enable != 0 && enable != 1)) {
+		pr_warn("cave: invalid %s value\n", attr->attr.name);
+		return count;
+	}
+
+	if (enable) {
 		if (!cave_random_vmin_enabled)
 			cave_random_vmin_enabled = 1;
 	}
@@ -444,65 +482,70 @@ ssize_t random_vmin_enable_store(struct kobject *kobj, struct kobj_attribute *at
 }
 
 static
-ssize_t max_vmin_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+ssize_t max_voffset_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	int ret = 0;
 
-	ret += sprintf(buf, "%d\n", cave_max_vmin);
+	ret += sprintf(buf, "%d\n", cave_max_voffset);
 
 	return ret;
 }
 
 static
-ssize_t max_vmin_store(struct kobject *kobj, struct kobj_attribute *attr,
-		       const char *buf, size_t count)
-{
-	int val;
-	int err;
-
-	err = kstrtouint(buf, 10, &val);
-	if (err) {
-		pr_warn("cave: invalid max_vmin value\n");
-		return count;
-	}
-
-	cave_max_vmin = val;
-
-	return count;
-}
-
-static
-ssize_t kernel_vmin_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
-{
-	int ret = 0;
-
-	ret += sprintf(buf, "%d\n", cave_kernel_vmin);
-
-	return ret;
-}
-
-static
-ssize_t kernel_vmin_store(struct kobject *kobj, struct kobj_attribute *attr,
+ssize_t max_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 			  const char *buf, size_t count)
 {
 	unsigned long flags;
-	int val;
+	int voffset;
 	int err;
-	int i;
 
-	err = kstrtouint(buf, 10, &val);
+	err = kstrtouint(buf, 10, &voffset);
 	if (err) {
-		pr_warn("cave: invalid kernel_vmin value\n");
-		return count;
-	}
-
-	if (val > cave_max_vmin) {
-		pr_warn("cave: kernel_vmin out of range\n");
+		pr_warn("cave: invalid %s value\n", attr->attr.name);
 		return count;
 	}
 
 	spin_lock_irqsave(&cave_lock, flags);
-	cave_kernel_vmin = val;
+	if (voffset < cave_kernel_voffset)
+		pr_warn("cave: new value of max_voffset greater than kernel voffset\n");
+	else
+		cave_max_voffset = voffset;
+	spin_unlock_irqrestore(&cave_lock, flags);
+	return count;
+}
+
+static
+ssize_t kernel_voffset_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	int ret = 0;
+
+	ret += sprintf(buf, "%d\n", cave_kernel_voffset);
+
+	return ret;
+}
+
+static
+ssize_t kernel_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
+			     const char *buf, size_t count)
+{
+	unsigned long flags;
+	int voffset;
+	int err;
+	int i;
+
+	err = kstrtouint(buf, 10, &voffset);
+	if (err) {
+		pr_warn("cave: invalid %s value\n", attr->attr.name);
+		return count;
+	}
+
+	if (voffset > cave_max_voffset) {
+		pr_warn("cave: %s out of range\n", attr->attr.name);
+		return count;
+	}
+
+	spin_lock_irqsave(&cave_lock, flags);
+	cave_kernel_voffset = voffset;
 	for_each_possible_cpu(i)
 		idle_task(i)->cave_data = CAVE_KERNEL_CONTEXT;
 	spin_unlock_irqrestore(&cave_lock, flags);
@@ -520,6 +563,9 @@ ssize_t reset_stats_store(struct kobject *kobj, struct kobj_attribute *attr,
 	if (cave_enabled) {
 		memset(&cave_stat, 0, sizeof(struct cave_stat));
 		memset(cave_stat_avg, 0, sizeof(cave_stat_avg));
+		stat_samples[0] = 1;
+		stat_samples[1] = 1;
+		stat_samples[2] = 1;
 	}
 	spin_unlock_irqrestore(&cave_lock, flags);
 
@@ -570,8 +616,8 @@ KERNEL_ATTR_RO(raw_stats);
 KERNEL_ATTR_WO(reset_stats);
 KERNEL_ATTR_RO(voltage);
 KERNEL_ATTR_RW(random_vmin_enable);
-KERNEL_ATTR_RW(max_vmin);
-KERNEL_ATTR_RW(kernel_vmin);
+KERNEL_ATTR_RW(max_voffset);
+KERNEL_ATTR_RW(kernel_voffset);
 
 static struct attribute_group attr_group = {
 	.name = "cave",
@@ -582,8 +628,8 @@ static struct attribute_group attr_group = {
 		&raw_stats_attr.attr,
 		&voltage_attr.attr,
 		&random_vmin_enable_attr.attr,
-		&max_vmin_attr.attr,
-		&kernel_vmin_attr.attr,
+		&max_voffset_attr.attr,
+		&kernel_voffset_attr.attr,
 		NULL
 	}
 };
@@ -623,9 +669,11 @@ SYSCALL_DEFINE3(uniserver_ctl, int, action, int, op1, int, op2)
 	switch (action) {
 	case CAVE_SET_TASK_VOFFSET:
 		_cave_set_task(p, op2);
+		/*
 		printk(KERN_WARNING "cave: pid %d vmin: %ld voff: %3ld\n",
 		       task_tgid_vnr(p), p->cave_data.voltage,
 		       -VOFFSET_OF(p->cave_data.voltage));
+		*/
 		return 0;
 	}
 

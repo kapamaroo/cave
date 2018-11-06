@@ -16,6 +16,7 @@
 #include <net/net_namespace.h>
 #include <linux/sched/rt.h>
 #include <linux/mm_types.h>
+#include <linux/cave.h>
 
 #include <asm/thread_info.h>
 
@@ -242,6 +243,7 @@ extern struct cred init_cred;
 	.tasks		= LIST_HEAD_INIT(tsk.tasks),			\
 	INIT_PUSHABLE_TASKS(tsk)					\
 	INIT_CGROUP_SCHED(tsk)						\
+	INIT_TASK_CAVE						        \
 	.ptraced	= LIST_HEAD_INIT(tsk.ptraced),			\
 	.ptrace_entry	= LIST_HEAD_INIT(tsk.ptrace_entry),		\
 	.real_parent	= &tsk,						\
