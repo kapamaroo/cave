@@ -157,13 +157,10 @@ static long read_voltage_cached(void)
 
 static long read_voltage_msr(void)
 {
-	unsigned long flags;
 	long voffset_msr, voltage_msr, voltage_cached;
 
-	spin_lock_irqsave(&cave_lock, flags);
 	voffset_msr = read_voffset_msr();
 	voltage_cached = effective_voltage;
-	spin_unlock_irqrestore(&cave_lock, flags);
 
 	voltage_msr = VOLTAGE_OF(voffset_msr);
 
@@ -174,7 +171,9 @@ static long read_voltage_msr(void)
 
 static void wait_voltage(long new_voltage)
 {
-	while(new_voltage > read_voltage_msr())
+	long voltage;
+
+	while(new_voltage > (voltage = read_voltage_msr()))
 		cpu_relax();
 }
 
@@ -232,11 +231,10 @@ static void _cave_switch(cave_data_t new_context)
 	new_vmin = select_voltage(prev_vmin, new_context);
 	write_voltage_cached(new_vmin);
 	write_voltage_msr(new_vmin);
+	if (new_vmin > prev_vmin)
+		wait_voltage(new_context.voltage);
 
 	spin_unlock_irqrestore(&cave_lock, flags);
-
-	if(new_vmin > prev_vmin)
-		wait_voltage(new_vmin);
 }
 
 __visible void cave_entry_switch(void)
@@ -633,6 +631,7 @@ static struct attribute_group attr_group = {
 
 int cave_init(void)
 {
+	unsigned long flags;
 	int i;
 	int err;
 	long voltage;
@@ -643,6 +642,7 @@ int cave_init(void)
                 return err;
         }
 
+	spin_lock_irqsave(&cave_lock, flags);
 	for_each_possible_cpu(i) {
 		per_cpu(context, i) = CAVE_KERNEL_CONTEXT;
 		idle_task(i)->cave_data = CAVE_KERNEL_CONTEXT;
@@ -650,6 +650,7 @@ int cave_init(void)
 
         voltage = read_voltage_msr();
 	write_voltage_cached(voltage);
+	spin_unlock_irqrestore(&cave_lock, flags);
 
         pr_warn("cave: msr voltage: %ld offset: %ld\n", voltage, -VOFFSET_OF(voltage));
 
