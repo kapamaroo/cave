@@ -217,17 +217,18 @@ static void _cave_switch(cave_data_t new_context)
 	unsigned long flags;
 	long new_vmin;
 	long prev_vmin;
-	bool done = false;
+	int done = 0;
 
 	if (!cave_enabled)
 		return;
 
 	while (!spin_trylock_irqsave(&cave_lock, flags)) {
-		if (!done) {
-			cave_stat.locked++;
-			done = true;
-		}
+		done++;
+		cpu_relax();
 	}
+
+	if (done)
+		cave_stat.locked++;
 
 	this_cpu_write(context, new_context);
 	prev_vmin = read_voltage_cached();
