@@ -32,6 +32,7 @@ struct cave_stat {
 
 static volatile int cave_enabled = 0;
 static DEFINE_SPINLOCK(cave_lock);
+static DEFINE_SPINLOCK(cave_stat_avg_lock);
 DEFINE_PER_CPU(cave_data_t, context);
 static volatile int cave_random_vmin_enabled __read_mostly = 0;
 static volatile int cave_kernel_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
@@ -73,9 +74,11 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 	memset(&cave_stat, 0, sizeof(struct cave_stat));
 	spin_unlock_irqrestore(&cave_lock, flags);
 
+	spin_lock_irqsave(&cave_stat_avg_lock, flags);
 	RUNNING_AVG_STAT(cave_stat_avg[0], new_stat, stat_samples[0], 60);
 	RUNNING_AVG_STAT(cave_stat_avg[1], new_stat, stat_samples[1], 5 * 60);
 	RUNNING_AVG_STAT(cave_stat_avg[2], new_stat, stat_samples[2], 10 * 60);
+	spin_unlock_irqrestore(&cave_stat_avg_lock, flags);
 
 	hrtimer_forward_now(&stats_hrtimer, stats_period_time);
 
@@ -365,13 +368,15 @@ static int print_cave_stats(char *buf, const bool raw)
 
 	spin_lock_irqsave(&cave_lock, flags);
 	enabled = cave_enabled;
-	if (enabled) {
+	if (enabled)
 		stat[0] = cave_stat;
-		stat[1] = cave_stat_avg[0];
-		stat[2] = cave_stat_avg[1];
-		stat[3] = cave_stat_avg[2];
-	}
 	spin_unlock_irqrestore(&cave_lock, flags);
+
+	spin_lock_irqsave(&cave_stat_avg_lock, flags);
+	stat[1] = cave_stat_avg[0];
+	stat[2] = cave_stat_avg[1];
+	stat[3] = cave_stat_avg[2];
+	spin_unlock_irqrestore(&cave_stat_avg_lock, flags);
 
 	if (enabled)
 		ret += _print_cave_stats(buf + ret, stat, raw);
