@@ -102,12 +102,6 @@ static void stats_init(void)
 static void stats_clear(void)
 {
 	hrtimer_cancel(&stats_hrtimer);
-
-	memset(&cave_stat, 0, sizeof(struct cave_stat));
-	memset(cave_stat_avg, 0, sizeof(cave_stat_avg));
-	stat_samples[0] = 1;
-	stat_samples[1] = 1;
-	stat_samples[2] = 1;
 }
 
 static inline void write_voffset_msr(u64 voffset)
