@@ -104,6 +104,29 @@ static void stats_clear(void)
 	hrtimer_cancel(&stats_hrtimer);
 }
 
+#if 0
+static void cave_check_tasks(void)
+{
+	struct task_struct *p;
+
+	read_lock(&tasklist_lock);
+	for_each_process(p) {
+		struct cave_data *c = &p->cave_data;
+		if (p->flags & PF_KTHREAD) {
+			if (c->voltage != VOLTAGE_OF(cave_kernel_voffset))
+				pr_warn("cave: kthread %s with %d voltage\n",
+					p->comm, c->voltage);
+		}
+		else {
+			if (c->voltage == VOLTAGE_OF(cave_kernel_voffset))
+				pr_warn("cave: user thread %s with %d voltage\n",
+					p->comm, c->voltage);
+		}
+	}
+	read_unlock(&tasklist_lock);
+}
+#endif
+
 static inline void write_voffset_msr(u64 voffset)
 {
 	wrmsrl(0x150, CORE_VOFFSET_VAL(voffset));
