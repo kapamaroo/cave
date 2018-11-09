@@ -49,6 +49,9 @@ static int stat_samples[3] = { 1, 1, 1 };
 #define STAT_INT(x)	((x) >> FSHIFT)
 #define STAT_FRAC(x)	STAT_INT(((x) & (FIXED_1 - 1)) * 100)
 
+#define CAVE_STATS_TIMER_PERIOD	1
+#define CAVE_STATS_MINUTE	(60 / CAVE_STATS_TIMER_PERIOD)
+
 #define __RUNNING_AVG_STAT(d, s, n, x)		\
 	d.x = (d.x * (n - 1) + s.x) / n
 #define RUNNING_AVG_STAT(d, s, n, l)		\
@@ -75,9 +78,9 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 	spin_unlock_irqrestore(&cave_lock, flags);
 
 	spin_lock_irqsave(&cave_stat_avg_lock, flags);
-	RUNNING_AVG_STAT(cave_stat_avg[0], new_stat, stat_samples[0], 60);
-	RUNNING_AVG_STAT(cave_stat_avg[1], new_stat, stat_samples[1], 5 * 60);
-	RUNNING_AVG_STAT(cave_stat_avg[2], new_stat, stat_samples[2], 10 * 60);
+	RUNNING_AVG_STAT(cave_stat_avg[0], new_stat, stat_samples[0], 1 * CAVE_STATS_MINUTE);
+	RUNNING_AVG_STAT(cave_stat_avg[1], new_stat, stat_samples[1], 5 * CAVE_STATS_MINUTE);
+	RUNNING_AVG_STAT(cave_stat_avg[2], new_stat, stat_samples[2], 10 * CAVE_STATS_MINUTE);
 	spin_unlock_irqrestore(&cave_stat_avg_lock, flags);
 
 	hrtimer_forward_now(&stats_hrtimer, stats_period_time);
@@ -93,7 +96,7 @@ static void stats_init(void)
 	stat_samples[1] = 1;
 	stat_samples[2] = 1;
 
-	stats_period_time = ktime_set(1, 0);
+	stats_period_time = ktime_set(CAVE_STATS_TIMER_PERIOD, 0);
 	hrtimer_init(&stats_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	stats_hrtimer.function = stats_gather;
 	hrtimer_start(&stats_hrtimer, stats_period_time, HRTIMER_MODE_REL);
