@@ -296,6 +296,13 @@ void cave_set_task(struct task_struct *p)
 	}
 }
 
+void cave_set_init_task(void)
+{
+	struct task_struct *p = current;
+
+	p->cave_data = CAVE_NOMINAL_CONTEXT;
+}
+
 static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 {
 	int ret = 0;

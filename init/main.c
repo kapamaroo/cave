@@ -88,6 +88,7 @@
 #include <linux/io.h>
 #include <linux/cache.h>
 #include <linux/rodata_test.h>
+#include <linux/cave.h>
 
 #include <asm/io.h>
 #include <asm/bugs.h>
@@ -955,6 +956,8 @@ static inline void mark_readonly(void)
 static int __ref kernel_init(void *unused)
 {
 	int ret;
+
+	cave_set_init_task();
 
 	kernel_init_freeable();
 	/* need to finish all async __init code before freeing the memory */

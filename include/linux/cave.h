@@ -21,12 +21,19 @@ typedef struct cave_data {
 	.cave_data = { .voltage = VOLTAGE_OF(CAVE_DEFAULT_KERNEL_VOFFSET) },
 
 void cave_set_task(struct task_struct *p);
+void cave_set_init_task(void);
 
 #else
 #define INIT_TASK_CAVE
 
 static void cave_set_task(task_struct *p)
-{}
+{
+}
+
+static void cave_set_init_task(void)
+{
+}
+
 #endif
 
 #endif /* INCLUDE_LINUX_CAVE_H_ */
