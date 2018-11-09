@@ -290,7 +290,7 @@ void cave_set_task(struct task_struct *p)
 	if (p->cave_data.voltage == 0)
 		pr_warn("cave: pid %d comm=%s with no vmin", task_tgid_vnr(p), p->comm);
 
-	if (cave_random_vmin_enabled) {
+	if (cave_random_vmin_enabled && !(p->flags & PF_KTHREAD)) {
 		voffset = get_random_long() % cave_max_voffset;
 		__cave_set_task(p, voffset);
 	}
