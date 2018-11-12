@@ -32,7 +32,6 @@ struct cave_stat {
 
 static volatile int cave_enabled = 0;
 static DEFINE_SPINLOCK(cave_lock);
-static DEFINE_SPINLOCK(cave_stat_avg_lock);
 DEFINE_PER_CPU(cave_data_t, context);
 static volatile int cave_random_vmin_enabled __read_mostly = 0;
 static volatile int cave_kernel_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
@@ -40,6 +39,8 @@ static volatile int cave_max_voffset __read_mostly = CAVE_DEFAULT_MAX_VOFFSET;
 
 static volatile long effective_voltage = CAVE_NOMINAL_VOLTAGE;
 
+#ifdef CONFIG_CAVE_STATS
+static DEFINE_SPINLOCK(cave_stat_avg_lock);
 static struct cave_stat cave_stat;
 static struct cave_stat cave_stat_avg[3];
 static int stat_samples[3] = { 1, 1, 1 };
@@ -51,6 +52,8 @@ static int stat_samples[3] = { 1, 1, 1 };
 
 #define CAVE_STATS_TIMER_PERIOD	1
 #define CAVE_STATS_MINUTE	(60 / CAVE_STATS_TIMER_PERIOD)
+
+#define INC(x)	do { x++; } while (0)
 
 #define __RUNNING_AVG_STAT(d, s, n, x)		\
 	d.x = (d.x * (n - 1) + s.x) / n
@@ -106,6 +109,18 @@ static void stats_clear(void)
 {
 	hrtimer_cancel(&stats_hrtimer);
 }
+#else
+
+#define INC(x)
+
+static void stats_init(void)
+{
+}
+
+static void stats_clear(void)
+{
+}
+#endif
 
 #if 0
 static void cave_check_tasks(void)
@@ -206,11 +221,11 @@ static long select_voltage(long prev_vmin, cave_data_t my_context)
 	int i;
 
 	if (new_vmin == prev_vmin) {
-		cave_stat.skip_fast++;
+		INC(cave_stat.skip_fast);
 		return -1;
 	}
 	else if (new_vmin > prev_vmin) {
-		cave_stat.inc++;
+		INC(cave_stat.inc);
 		return new_vmin;
 	}
 
@@ -222,10 +237,10 @@ static long select_voltage(long prev_vmin, cave_data_t my_context)
 
 	if (new_vmin == prev_vmin) {
 		new_vmin = -1;
-		cave_stat.skip_slow++;
+		INC(cave_stat.skip_slow);
 	}
 	else if (new_vmin < prev_vmin)
-		cave_stat.dec++;
+		INC(cave_stat.dec);
 	else
 		WARN_ON(1);
 
@@ -248,7 +263,7 @@ static void _cave_switch(cave_data_t new_context)
 	}
 
 	if (done)
-		cave_stat.locked++;
+		INC(cave_stat.locked);
 
 	this_cpu_write(context, new_context);
 	prev_vmin = read_voltage_cached();
@@ -306,6 +321,7 @@ void cave_set_init_task(void)
 	p->cave_data = CAVE_NOMINAL_CONTEXT;
 }
 
+#ifdef CONFIG_CAVE_STATS
 static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 {
 	int ret = 0;
@@ -411,6 +427,14 @@ static int print_cave_stats(char *buf, const bool raw)
 
 	return ret;
 }
+#else
+static int print_cave_stats(char *buf, const bool raw)
+{
+	int ret = 0;
+	ret += sprintf(buf + ret, "kernel build without stats\n");
+	return ret;
+}
+#endif
 
 /* sysfs interface */
 #define KERNEL_ATTR_RW(_name) \

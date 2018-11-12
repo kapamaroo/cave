@@ -4,4 +4,9 @@ config UNISERVER_CAVE
         bool "CAVE feature"
         default n
 
+config UNISERVER_CAVE_STATS
+        bool "CAVE stats"
+        default n
+	depends on UNISERVER_CAVE
+
 endmenu
