@@ -204,43 +204,41 @@ static void wait_voltage(long new_voltage)
 		cpu_relax();
 }
 
-static long select_voltage(long prev_vmin, cave_data_t my_context)
+static long select_voltage(long curr_vmin, cave_data_t my_context)
 {
-	long new_vmin = my_context.voltage;
+	long new_voltage = my_context.voltage;
 	int i;
 
-	if (new_vmin == prev_vmin) {
+	if (new_voltage == curr_vmin) {
 		INC(cave_stat.skip_fast);
-		return -1;
+		return new_voltage;
 	}
-	else if (new_vmin > prev_vmin) {
+	else if (new_voltage > curr_vmin) {
 		INC(cave_stat.inc);
-		return new_vmin;
+		return new_voltage;
 	}
 
 	for_each_possible_cpu(i) {
 		cave_data_t tmp = per_cpu(context, i);
-		if(tmp.voltage > new_vmin)
-			new_vmin = tmp.voltage;
+		if(tmp.voltage > new_voltage)
+			new_voltage = tmp.voltage;
 	}
 
-	if (new_vmin == prev_vmin) {
-		new_vmin = -1;
+	if (new_voltage == curr_vmin)
 		INC(cave_stat.skip_slow);
-	}
-	else if (new_vmin < prev_vmin)
+	else if (new_voltage < curr_vmin)
 		INC(cave_stat.dec);
 	else
 		WARN_ON(1);
 
-	return new_vmin;
+	return new_voltage;
 }
 
 static void _cave_switch(cave_data_t new_context)
 {
 	unsigned long flags;
-	long new_vmin;
-	long prev_vmin;
+	long new_voltage;
+	long curr_voltage;
 	int done = 0;
 
 	if (!cave_enabled)
@@ -255,11 +253,18 @@ static void _cave_switch(cave_data_t new_context)
 		INC(cave_stat.locked);
 
 	this_cpu_write(context, new_context);
-	prev_vmin = read_voltage_cached();
-	new_vmin = select_voltage(prev_vmin, new_context);
-	write_voltage_cached(new_vmin);
-	write_voltage_msr(new_vmin);
-	if (new_vmin > prev_vmin)
+
+	curr_voltage = read_voltage_cached();
+	new_voltage = select_voltage(curr_voltage, new_context);
+
+	if (new_voltage == curr_voltage)
+		;
+	else {
+		write_voltage_cached(new_voltage);
+		write_voltage_msr(new_voltage);
+	}
+
+	if (new_voltage > curr_voltage)
 		wait_voltage(new_context.voltage);
 
 	spin_unlock_irqrestore(&cave_lock, flags);
