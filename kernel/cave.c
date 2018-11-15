@@ -37,7 +37,7 @@ static volatile int cave_random_vmin_enabled __read_mostly = 0;
 static volatile int cave_kernel_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
 static volatile int cave_max_voffset __read_mostly = CAVE_DEFAULT_MAX_VOFFSET;
 
-static volatile long effective_voltage = CAVE_NOMINAL_VOLTAGE;
+static volatile long voltage_cached = CAVE_NOMINAL_VOLTAGE;
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 static DEFINE_SPINLOCK(cave_stat_avg_lock);
@@ -166,7 +166,7 @@ static void write_voltage_cached(long new_voltage)
 	if (unlikely(new_voltage < 0 || new_voltage > CAVE_NOMINAL_VOLTAGE))
 		return;
 
-	effective_voltage = new_voltage;
+	voltage_cached = new_voltage;
 }
 
 static void write_voltage_msr(long new_voltage)
@@ -176,9 +176,9 @@ static void write_voltage_msr(long new_voltage)
 	if (unlikely(new_voltage < 0 || new_voltage > CAVE_NOMINAL_VOLTAGE))
 		return;
 
-	if (unlikely(new_voltage != effective_voltage)) {
+	if (unlikely(new_voltage != voltage_cached)) {
 		WARN_ON_ONCE(1);
-		effective_voltage = new_voltage;
+		voltage_cached = new_voltage;
 	}
 
 	if (!new_voltage)
@@ -190,16 +190,14 @@ static void write_voltage_msr(long new_voltage)
 
 static long read_voltage_cached(void)
 {
-	return effective_voltage;
+	return voltage_cached;
 }
 
 static long read_voltage_msr(void)
 {
-	long voffset_msr, voltage_msr, voltage_cached;
+	long voffset_msr, voltage_msr;
 
 	voffset_msr = read_voffset_msr();
-	voltage_cached = effective_voltage;
-
 	voltage_msr = VOLTAGE_OF(voffset_msr);
 
 	WARN_ON_ONCE(cave_enabled && voltage_msr != voltage_cached);
