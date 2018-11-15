@@ -170,13 +170,13 @@ static void write_voltage_msr(long new_voltage)
 {
 	u64 new_voffset;
 
+	new_voffset = VOFFSET_OF(new_voltage);
+	write_voffset_msr(new_voffset);
 
 	if (unlikely(new_voltage != voltage_cached)) {
 		WARN_ON_ONCE(1);
 		voltage_cached = new_voltage;
 	}
-	new_voffset = VOFFSET_OF(new_voltage);
-	write_voffset_msr(new_voffset);
 }
 
 static long read_voltage_cached(void)
