@@ -163,9 +163,6 @@ static inline u64 read_voffset_msr(void)
 
 static void write_voltage_cached(long new_voltage)
 {
-	if (unlikely(new_voltage < 0 || new_voltage > CAVE_NOMINAL_VOLTAGE))
-		return;
-
 	voltage_cached = new_voltage;
 }
 
@@ -173,17 +170,11 @@ static void write_voltage_msr(long new_voltage)
 {
 	u64 new_voffset;
 
-	if (unlikely(new_voltage < 0 || new_voltage > CAVE_NOMINAL_VOLTAGE))
-		return;
 
 	if (unlikely(new_voltage != voltage_cached)) {
 		WARN_ON_ONCE(1);
 		voltage_cached = new_voltage;
 	}
-
-	if (!new_voltage)
-		pr_warn("cave: pid %d (%s) fix", task_tgid_vnr(current), current->comm);
-
 	new_voffset = VOFFSET_OF(new_voltage);
 	write_voffset_msr(new_voffset);
 }
@@ -303,7 +294,7 @@ void cave_set_task(struct task_struct *p)
 {
 	unsigned long voffset = 0;
 
-	if (p->cave_data.voltage == 0)
+	if (p->cave_data.voltage <= 0)
 		pr_warn("cave: pid %d comm=%s with no vmin", task_tgid_vnr(p), p->comm);
 
 	if (cave_random_vmin_enabled && !(p->flags & PF_KTHREAD)) {
