@@ -39,7 +39,7 @@ static volatile int cave_max_voffset __read_mostly = CAVE_DEFAULT_MAX_VOFFSET;
 
 static volatile long effective_voltage = CAVE_NOMINAL_VOLTAGE;
 
-#ifdef CONFIG_CAVE_STATS
+#ifdef CONFIG_UNISERVER_CAVE_STATS
 static DEFINE_SPINLOCK(cave_stat_avg_lock);
 static struct cave_stat cave_stat;
 static struct cave_stat cave_stat_avg[3];
@@ -321,7 +321,7 @@ void cave_set_init_task(void)
 	p->cave_data = CAVE_NOMINAL_CONTEXT;
 }
 
-#ifdef CONFIG_CAVE_STATS
+#ifdef CONFIG_UNISERVER_CAVE_STATS
 static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 {
 	int ret = 0;
