@@ -193,8 +193,6 @@ static long read_voltage_msr(void)
 	voffset_msr = read_voffset_msr();
 	voltage_msr = VOLTAGE_OF(voffset_msr);
 
-	WARN_ON_ONCE(cave_enabled && voltage_msr != voltage_cached);
-
 	return voltage_msr;
 }
 
@@ -264,10 +262,10 @@ static void _cave_switch(cave_data_t new_context)
 		write_voltage_msr(new_voltage);
 	}
 
+	spin_unlock_irqrestore(&cave_lock, flags);
+
 	if (new_voltage > curr_voltage)
 		wait_voltage(new_context.voltage);
-
-	spin_unlock_irqrestore(&cave_lock, flags);
 }
 
 __visible void cave_entry_switch(void)
