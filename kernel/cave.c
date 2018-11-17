@@ -200,9 +200,9 @@ static long read_voltage_msr(void)
 
 static void wait_voltage(long new_voltage)
 {
-	long voltage;
+	long curr_voltage;
 
-	while(new_voltage > (voltage = read_voltage_msr()))
+	while (new_voltage > (curr_voltage = read_voltage_msr()))
 		cpu_relax();
 }
 
@@ -259,9 +259,7 @@ static void _cave_switch(cave_data_t new_context)
 	curr_voltage = read_voltage_cached();
 	new_voltage = select_voltage(curr_voltage, new_context);
 
-	if (new_voltage == curr_voltage)
-		;
-	else {
+	if (new_voltage != curr_voltage) {
 		write_voltage_cached(new_voltage);
 		write_voltage_msr(new_voltage);
 	}
