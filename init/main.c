@@ -957,8 +957,6 @@ static int __ref kernel_init(void *unused)
 {
 	int ret;
 
-	cave_set_init_task();
-
 	kernel_init_freeable();
 	/* need to finish all async __init code before freeing the memory */
 	async_synchronize_full();
@@ -968,6 +966,8 @@ static int __ref kernel_init(void *unused)
 	numa_default_policy();
 
 	rcu_end_inkernel_boot();
+
+	cave_set_init_task();
 
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
