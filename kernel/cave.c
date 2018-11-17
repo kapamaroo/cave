@@ -43,7 +43,7 @@ static volatile long voltage_cached = CAVE_NOMINAL_VOLTAGE;
 static DEFINE_SPINLOCK(cave_stat_avg_lock);
 static struct cave_stat cave_stat;
 static struct cave_stat cave_stat_avg[3];
-static int stat_samples[3] = { 1, 1, 1 };
+static int stat_samples[3] = { 0, 0, 0 };
 
 #define FSHIFT	11
 #define FIXED_1	(1 << FSHIFT)
@@ -56,15 +56,17 @@ static int stat_samples[3] = { 1, 1, 1 };
 #define INC(x)	do { x++; } while (0)
 
 #define __RUNNING_AVG_STAT(d, s, n, x)		\
-	d.x = (d.x * (n - 1) + s.x) / n
+	d.x = (d.x * (n) + s.x) / ((n) + 1)
 #define RUNNING_AVG_STAT(d, s, n, l)		\
+	if (n == l)				\
+		n--;				\
+						\
 	__RUNNING_AVG_STAT(d, s, n, inc);	\
 	__RUNNING_AVG_STAT(d, s, n, dec);	\
 	__RUNNING_AVG_STAT(d, s, n, skip_fast);	\
 	__RUNNING_AVG_STAT(d, s, n, skip_slow);	\
 	__RUNNING_AVG_STAT(d, s, n, locked);	\
-	if (n < l)				\
-		n++;
+	n++;
 
 static struct hrtimer stats_hrtimer;
 static ktime_t stats_period_time;
@@ -95,9 +97,9 @@ static void stats_init(void)
 {
 	memset(&cave_stat, 0, sizeof(struct cave_stat));
 	memset(cave_stat_avg, 0, sizeof(cave_stat_avg));
-	stat_samples[0] = 1;
-	stat_samples[1] = 1;
-	stat_samples[2] = 1;
+	stat_samples[0] = 0;
+	stat_samples[1] = 0;
+	stat_samples[2] = 0;
 
 	stats_period_time = ktime_set(CAVE_STATS_TIMER_PERIOD, 0);
 	hrtimer_init(&stats_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
