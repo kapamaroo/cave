@@ -32,7 +32,7 @@ struct cave_stat {
 
 static volatile int cave_enabled = 0;
 static DEFINE_SPINLOCK(cave_lock);
-DEFINE_PER_CPU(cave_data_t, context);
+DEFINE_PER_CPU(cave_data_t, context) = CAVE_NOMINAL_CONTEXT;
 static volatile int cave_random_vmin_enabled __read_mostly = 0;
 static volatile int cave_kernel_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
 static volatile int cave_max_voffset __read_mostly = CAVE_DEFAULT_MAX_VOFFSET;
@@ -683,7 +683,6 @@ static struct attribute_group attr_group = {
 int cave_init(void)
 {
 	unsigned long flags;
-	int i;
 	int err;
 	long voltage;
 
@@ -694,13 +693,10 @@ int cave_init(void)
         }
 
 	spin_lock_irqsave(&cave_lock, flags);
-	for_each_possible_cpu(i) {
-		per_cpu(context, i) = CAVE_KERNEL_CONTEXT;
-		idle_task(i)->cave_data = CAVE_KERNEL_CONTEXT;
-	}
 
         voltage = read_voltage_msr();
-	write_voltage_cached(voltage);
+	write_voltage_cached(CAVE_NOMINAL_VOLTAGE);
+	write_voltage_msr(CAVE_NOMINAL_VOLTAGE);
 	spin_unlock_irqrestore(&cave_lock, flags);
 
         pr_warn("cave: msr voltage: %ld offset: %ld\n", voltage, -VOFFSET_OF(voltage));
