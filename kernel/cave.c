@@ -658,6 +658,19 @@ ssize_t voltage_show(struct kobject *kobj, struct kobj_attribute *attr, char *bu
 	return ret;
 }
 
+static
+ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	return 0;
+}
+
+static
+ssize_t debug_store(struct kobject *kobj, struct kobj_attribute *attr,
+		    const char *buf, size_t count)
+{
+	return count;
+}
+
 KERNEL_ATTR_RW(enable);
 KERNEL_ATTR_RO(stats);
 KERNEL_ATTR_RO(raw_stats);
@@ -666,6 +679,7 @@ KERNEL_ATTR_RO(voltage);
 KERNEL_ATTR_RW(random_vmin_enable);
 KERNEL_ATTR_RW(max_voffset);
 KERNEL_ATTR_RW(kernel_voffset);
+KERNEL_ATTR_RW(debug);
 
 static struct attribute_group attr_group = {
 	.name = "cave",
@@ -678,6 +692,7 @@ static struct attribute_group attr_group = {
 		&random_vmin_enable_attr.attr,
 		&max_voffset_attr.attr,
 		&kernel_voffset_attr.attr,
+		&debug_attr.attr,
 		NULL
 	}
 };
