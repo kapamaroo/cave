@@ -13,6 +13,9 @@
 
 #define CAVE_KERNEL_CONTEXT (cave_data_t){ .voltage = VOLTAGE_OF(cave_kernel_voffset) }
 #define CAVE_NOMINAL_CONTEXT	(cave_data_t){ .voltage = CAVE_NOMINAL_VOLTAGE }
+#ifdef CONFIG_UNISERVER_CAVE_USERSPACE
+#define CAVE_USERSPACE_CONTEXT	(cave_data_t){ .voltage = VOLTAGE_OF(cave_userspace_voffset) }
+#endif
 
 #define TO_VOFFSET_DATA(__val)	(__val ? (0x800ULL - (u64)__val) << 21 : 0ULL)
 #define TO_VOFFSET_VAL(__data)    (__data ? (0x800ULL - ((u64)__data >> 21)) : 0ULL)
@@ -35,8 +38,11 @@ static DEFINE_SPINLOCK(cave_lock);
 DEFINE_PER_CPU(cave_data_t, context) = CAVE_NOMINAL_CONTEXT;
 static volatile int cave_random_vmin_enabled __read_mostly = 0;
 static volatile int cave_kernel_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
-static volatile int cave_max_voffset __read_mostly = CAVE_DEFAULT_MAX_VOFFSET;
-
+#ifdef CONFIG_UNISERVER_CAVE_USERSPACE
+#define CAVE_DEFAULT_USERSPACE_VOFFSET	CONFIG_UNISERVER_CAVE_DEFAULT_USERSPACE_VOFFSET
+static volatile int cave_userspace_voffset __read_mostly = CAVE_DEFAULT_USERSPACE_VOFFSET;
+#endif
+static volatile int cave_max_voffset __read_mostly = 400;
 static volatile long voltage_cached = CAVE_NOMINAL_VOLTAGE;
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
@@ -293,9 +299,12 @@ static void _cave_set_task(struct task_struct *p, long voffset)
 	__cave_set_task(p, voffset);
 }
 
-void cave_set_task(struct task_struct *p)
+/* should be protected by tasklist_lock */
+void cave_set_task(struct task_struct *p, struct task_struct *parent)
 {
 	unsigned long voffset = 0;
+
+	p->cave_data = parent->cave_data;
 
 	if (p->cave_data.voltage <= 0)
 		pr_warn("cave: pid %d comm=%s with no vmin", task_tgid_vnr(p), p->comm);
@@ -310,7 +319,11 @@ void cave_set_init_task(void)
 {
 	struct task_struct *p = current;
 
+#ifdef CONFIG_UNISERVER_CAVE_USERSPACE
+	p->cave_data = CAVE_USERSPACE_CONTEXT;
+#else
 	p->cave_data = CAVE_NOMINAL_CONTEXT;
+#endif
 }
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
@@ -555,6 +568,10 @@ ssize_t max_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 	spin_lock_irqsave(&cave_lock, flags);
 	if (voffset < cave_kernel_voffset)
 		pr_warn("cave: new value of max_voffset greater than kernel voffset\n");
+#ifdef CONFIG_UNISERVER_CAVE_USERSPACE
+	else if (voffset < cave_userspace_voffset)
+		pr_warn("cave: new value of max_voffset greater than userspace voffset\n");
+#endif
 	else
 		cave_max_voffset = voffset;
 	spin_unlock_irqrestore(&cave_lock, flags);
@@ -575,6 +592,7 @@ static
 ssize_t kernel_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 			     const char *buf, size_t count)
 {
+	struct task_struct *g, *p;
 	unsigned long flags;
 	int voffset;
 	int err;
@@ -592,13 +610,76 @@ ssize_t kernel_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 	}
 
 	spin_lock_irqsave(&cave_lock, flags);
+
+	if (cave_enabled) {
+		pr_warn("cave: must be disabled to change kernel voffset\n");
+		goto out;
+	}
 	cave_kernel_voffset = voffset;
+
+	write_lock_irq(&tasklist_lock);
 	for_each_possible_cpu(i)
 		idle_task(i)->cave_data = CAVE_KERNEL_CONTEXT;
+	for_each_process_thread(g, p)
+		if (p->flags & (PF_KTHREAD | PF_WQ_WORKER))
+			p->cave_data = CAVE_KERNEL_CONTEXT;
+	write_unlock_irq(&tasklist_lock);
+out:
 	spin_unlock_irqrestore(&cave_lock, flags);
 
 	return count;
 }
+
+#ifdef CONFIG_UNISERVER_CAVE_USERSPACE
+static
+ssize_t userspace_voffset_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	int ret = 0;
+
+	ret += sprintf(buf, "%d\n", cave_userspace_voffset);
+
+	return ret;
+}
+
+static
+ssize_t userspace_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
+				const char *buf, size_t count)
+{
+	struct task_struct *g, *p;
+	unsigned long flags;
+	int voffset;
+	int err;
+
+	err = kstrtouint(buf, 10, &voffset);
+	if (err) {
+		pr_warn("cave: invalid %s value\n", attr->attr.name);
+		return count;
+	}
+
+	if (voffset > cave_max_voffset) {
+		pr_warn("cave: %s out of range\n", attr->attr.name);
+		return count;
+	}
+
+	spin_lock_irqsave(&cave_lock, flags);
+
+	if (cave_enabled) {
+		pr_warn("cave: must be disabled to change userspace voffset\n");
+		goto out;
+	}
+	cave_userspace_voffset = voffset;
+
+	write_lock_irq(&tasklist_lock);
+	for_each_process_thread(g, p)
+		if (!(p->flags & (PF_KTHREAD | PF_WQ_WORKER)))
+			p->cave_data = CAVE_USERSPACE_CONTEXT;
+	write_unlock_irq(&tasklist_lock);
+out:
+	spin_unlock_irqrestore(&cave_lock, flags);
+
+	return count;
+}
+#endif
 
 static
 ssize_t reset_stats_store(struct kobject *kobj, struct kobj_attribute *attr,
@@ -675,6 +756,9 @@ KERNEL_ATTR_RO(voltage);
 KERNEL_ATTR_RW(random_vmin_enable);
 KERNEL_ATTR_RW(max_voffset);
 KERNEL_ATTR_RW(kernel_voffset);
+#ifdef CONFIG_UNISERVER_CAVE_USERSPACE
+KERNEL_ATTR_RW(userspace_voffset);
+#endif
 KERNEL_ATTR_RW(debug);
 
 static struct attribute_group attr_group = {
@@ -688,6 +772,9 @@ static struct attribute_group attr_group = {
 		&random_vmin_enable_attr.attr,
 		&max_voffset_attr.attr,
 		&kernel_voffset_attr.attr,
+#ifdef CONFIG_UNISERVER_CAVE_USERSPACE
+		&userspace_voffset_attr.attr,
+#endif
 		&debug_attr.attr,
 		NULL
 	}

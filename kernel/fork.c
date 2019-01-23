@@ -1865,6 +1865,7 @@ static __latent_entropy struct task_struct *copy_process(
 	total_forks++;
 	spin_unlock(&current->sighand->siglock);
 	syscall_tracepoint_update(p);
+	cave_set_task(p, current);
 	write_unlock_irq(&tasklist_lock);
 
 	proc_fork_connector(p);
@@ -1874,8 +1875,6 @@ static __latent_entropy struct task_struct *copy_process(
 
 	trace_task_newtask(p, clone_flags);
 	uprobe_copy_process(p, clone_flags);
-
-	cave_set_task(p);
 
 	return p;
 
