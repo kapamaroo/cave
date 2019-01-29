@@ -10,12 +10,34 @@ enum perf_msr_id {
 	PERF_MSR_PTSC			= 5,
 	PERF_MSR_IRPERF			= 6,
 
+	PERF_MSR_VID			= 7,
+	PERF_MSR_VID_SNAP		= 8,
+	PERF_MSR_VID_UNIT		= 9,
+	PERF_MSR_VID_SCALE		= 10,
+	PERF_MSR_VID_CPUS		= 11,
+
+	PERF_MSR_THERM			= 12,
+	PERF_MSR_THERM_SNAP		= 13,
+	PERF_MSR_THERM_UNIT		= 14,
+	PERF_MSR_THERM_SCALE	= 15,
+
 	PERF_MSR_EVENT_MAX,
 };
+
+static bool test_vid(int idx)
+{
+	return true;
+}
 
 static bool test_aperfmperf(int idx)
 {
 	return boot_cpu_has(X86_FEATURE_APERFMPERF);
+}
+
+
+static bool test_therm_status(int idx)
+{
+	return boot_cpu_has(X86_FEATURE_DTHERM);
 }
 
 static bool test_ptsc(int idx)
@@ -93,6 +115,17 @@ PMU_EVENT_ATTR_STRING(pperf,  evattr_pperf,  "event=0x03");
 PMU_EVENT_ATTR_STRING(smi,    evattr_smi,    "event=0x04");
 PMU_EVENT_ATTR_STRING(ptsc,   evattr_ptsc,   "event=0x05");
 PMU_EVENT_ATTR_STRING(irperf, evattr_irperf, "event=0x06");
+PMU_EVENT_ATTR_STRING(vid, 	  evattr_vid,    "event=0x07");
+PMU_EVENT_ATTR_STRING(thermal, evattr_therm, "event=0x0C");
+
+PMU_EVENT_ATTR_STRING(vid.snapshot, evattr_vid_snap, "0");
+PMU_EVENT_ATTR_STRING(vid.unit, evattr_vid_unit, "mVolt");
+PMU_EVENT_ATTR_STRING(vid.scale, evattr_vid_scale, "0.12207");
+PMU_EVENT_ATTR_STRING(vid.own_cpus, evattr_vid_own_cpus, "0");
+
+PMU_EVENT_ATTR_STRING(thermal.snapshot, evattr_therm_snap, "0");
+PMU_EVENT_ATTR_STRING(thermal.unit, evattr_therm_unit, "C");
+PMU_EVENT_ATTR_STRING(thermal.scale, evattr_therm_scale, "1");
 
 static struct perf_msr msr[] = {
 	[PERF_MSR_TSC]    = { 0,		&evattr_tsc,	NULL,		 },
@@ -102,6 +135,15 @@ static struct perf_msr msr[] = {
 	[PERF_MSR_SMI]    = { MSR_SMI_COUNT,	&evattr_smi,	test_intel,	 },
 	[PERF_MSR_PTSC]   = { MSR_F15H_PTSC,	&evattr_ptsc,	test_ptsc,	 },
 	[PERF_MSR_IRPERF] = { MSR_F17H_IRPERF,	&evattr_irperf,	test_irperf,	 },
+	[PERF_MSR_VID] 	  = { 0x198,	&evattr_vid,	test_vid,	 },
+	[PERF_MSR_THERM] = { 0x19c, &evattr_therm,	     test_therm_status, },
+	[PERF_MSR_VID_SNAP] 	  = { 0x198,	&evattr_vid_snap,	test_vid,	 },
+	[PERF_MSR_VID_SCALE] 	  = { 0x198,	&evattr_vid_scale,	test_vid,	 },
+	[PERF_MSR_VID_UNIT] 	  = { 0x198,	&evattr_vid_unit,	test_vid,	 },
+	[PERF_MSR_VID_CPUS] 	  = { 0x198,	&evattr_vid_own_cpus,	test_vid,	 },
+	[PERF_MSR_THERM_SNAP] = { 0x19c, &evattr_therm_snap, test_therm_status, },
+	[PERF_MSR_THERM_UNIT] = { 0x19c, &evattr_therm_unit, test_therm_status, },
+	[PERF_MSR_THERM_SCALE] = { 0x19c, &evattr_therm_scale, test_therm_status, },
 };
 
 static struct attribute *events_attrs[PERF_MSR_EVENT_MAX + 1] = {
@@ -172,7 +214,7 @@ static inline u64 msr_read_counter(struct perf_event *event)
 }
 static void msr_event_update(struct perf_event *event)
 {
-	u64 prev, now;
+	u64 prev, now, tjMax;
 	s64 delta;
 
 	/* Careful, an NMI might modify the previous event value. */
@@ -185,9 +227,23 @@ again:
 
 	delta = now - prev;
 	if (unlikely(event->hw.event_base == MSR_SMI_COUNT))
+	{
 		delta = sign_extend64(delta, 31);
-
-	local64_add(delta, &event->count);
+		local64_add(delta, &event->count);
+	}
+	else if (unlikely(event->hw.event_base == 0x198)) {
+		now = (now >> 32);
+		local64_set(&event->count, now);
+	} else if (unlikely(event->hw.event_base == 0x19c)) {
+		/* if valid, extract digital readout, other set to -1 */
+		rdmsrl(0x01A2, tjMax);
+		tjMax = (tjMax >> 16) & 0xFF;
+		now =  (now & 0x007F0000) >> 16;
+		local64_set(&event->count, tjMax - now);
+	}
+	else {
+		local64_add(delta, &event->count);
+	}
 }
 
 static void msr_event_start(struct perf_event *event, int flags)
