@@ -548,7 +548,9 @@ void print_header(char *delim)
 
 	for (mp = sys.tp; mp; mp = mp->next) {
 
-		if (mp->format == FORMAT_RAW) {
+                if (strcmp(mp->name, "VID") == 0)
+			outp += sprintf(outp, "%s%4.4s", delim, mp->name);
+		else if (mp->format == FORMAT_RAW) {
 			if (mp->width == 64)
 				outp += sprintf(outp, "%s%18.18s", (printed++ ? delim : ""), mp->name);
 			else
@@ -577,7 +579,9 @@ void print_header(char *delim)
 		outp += sprintf(outp, "%sCoreTmp", (printed++ ? delim : ""));
 
 	for (mp = sys.cp; mp; mp = mp->next) {
-		if (mp->format == FORMAT_RAW) {
+                if (strcmp(mp->name, "VID") == 0)
+			outp += sprintf(outp, "%s%4.4s", delim, mp->name);
+		else if (mp->format == FORMAT_RAW) {
 			if (mp->width == 64)
 				outp += sprintf(outp, "%s%18.18s", delim, mp->name);
 			else
@@ -649,7 +653,9 @@ void print_header(char *delim)
 			outp += sprintf(outp, "%sRAM_%%", (printed++ ? delim : ""));
 	}
 	for (mp = sys.pp; mp; mp = mp->next) {
-		if (mp->format == FORMAT_RAW) {
+		if (strcmp(mp->name, "VID") == 0)
+			outp += sprintf(outp, "%s%4.4s", delim, mp->name);
+		else if (mp->format == FORMAT_RAW) {
 			if (mp->width == 64)
 				outp += sprintf(outp, "%s%18.18s", delim, mp->name);
 			else
@@ -832,7 +838,12 @@ int format_counters(struct thread_data *t, struct core_data *c,
 
 	/* Added counters */
 	for (i = 0, mp = sys.tp; mp; i++, mp = mp->next) {
-		if (mp->format == FORMAT_RAW) {
+                if (strcmp(mp->name, "VID") == 0) {
+			unsigned long long val = (t->counter[i] >> 32) & 0xffffULL;
+			float f = (float)val / 8192;
+			outp += sprintf(outp, "%s%6.4f", (printed++ ? delim : ""), f);
+		}
+		else if (mp->format == FORMAT_RAW) {
 			if (mp->width == 32)
 				outp += sprintf(outp, "%s0x%08x", (printed++ ? delim : ""), (unsigned int) t->counter[i]);
 			else
@@ -874,7 +885,12 @@ int format_counters(struct thread_data *t, struct core_data *c,
 		outp += sprintf(outp, "%s%d", (printed++ ? delim : ""), c->core_temp_c);
 
 	for (i = 0, mp = sys.cp; mp; i++, mp = mp->next) {
-		if (mp->format == FORMAT_RAW) {
+                if (strcmp(mp->name, "VID") == 0) {
+			unsigned long long val = (c->counter[i] >> 32) & 0xffffULL;
+			float f = (float)val / 8192;
+			outp += sprintf(outp, "%s%6.4f", (printed++ ? delim : ""), f);
+		}
+		else if (mp->format == FORMAT_RAW) {
 			if (mp->width == 32)
 				outp += sprintf(outp, "%s0x%08x", (printed++ ? delim : ""), (unsigned int) c->counter[i]);
 			else
@@ -965,7 +981,12 @@ int format_counters(struct thread_data *t, struct core_data *c,
 		outp += sprintf(outp, fmt8, (printed++ ? delim : ""), 100.0 * p->rapl_dram_perf_status * rapl_time_units / interval_float);
 
 	for (i = 0, mp = sys.pp; mp; i++, mp = mp->next) {
-		if (mp->format == FORMAT_RAW) {
+		if (strcmp(mp->name, "VID") == 0) {
+			unsigned long long val = (p->counter[i] >> 32) & 0xffffULL;
+			float f = (float)val / 8192;
+			outp += sprintf(outp, "%s%6.4f", (printed++ ? delim : ""), f);
+		}
+		else if (mp->format == FORMAT_RAW) {
 			if (mp->width == 32)
 				outp += sprintf(outp, "%s0x%08x", (printed++ ? delim : ""), (unsigned int) p->counter[i]);
 			else
@@ -1011,11 +1032,13 @@ void format_all_counters(struct thread_data *t, struct core_data *c, struct pkg_
 	static int printed;
 
 	if (!printed || !summary_only)
-		print_header("\t");
+		; // print_header("\t");
 
+#if 0
 	if (topo.num_cpus > 1)
 		format_counters(&average.threads, &average.cores,
 			&average.packages);
+#endif
 
 	printed = 1;
 
@@ -2522,6 +2545,7 @@ void turbostat_loop()
 	int retval;
 	int restarted = 0;
 
+	print_header("\t");
 restart:
 	restarted++;
 
@@ -5040,6 +5064,7 @@ int main(int argc, char **argv)
 	probe_sysfs();
 
 	turbostat_init();
+	do_skl_residency = 0;
 
 	/* dump counters and exit */
 	if (dump_only)
