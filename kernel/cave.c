@@ -33,6 +33,76 @@ struct cave_stat {
 	long total;
 };
 
+enum timestamp {
+	T_BEGIN = 0,
+	T_LOCK = T_BEGIN,
+	T_WAIT_VOLTAGE,
+	T_END
+};
+
+#define CONFIG_UNISERVER_CAVE_TIME_STATS
+#ifdef CONFIG_UNISERVER_CAVE_TIME_STATS
+struct cave_time_stat {
+	unsigned long long data[T_END];
+	long total;
+};
+
+DEFINE_PER_CPU(struct cave_time_stat, cave_time_stat_start);
+DEFINE_PER_CPU(struct cave_time_stat, cave_time_stat_stop);
+DEFINE_PER_CPU(struct cave_time_stat, cave_time_stat_val);
+static struct cave_time_stat cave_time_stat;
+static struct cave_time_stat cave_time_stat_avg[3];
+static int time_stat_samples[3];
+
+static inline void stat_start_sample(enum timestamp type)
+{
+	unsigned long long t;
+	struct cave_time_stat *p = this_cpu_ptr(&cave_time_stat_start);
+
+	t = rdtsc();
+	p->data[type] = t;
+}
+
+static inline void stat_stop_sample(enum timestamp type)
+{
+	unsigned long long t;
+	struct cave_time_stat *p = this_cpu_ptr(&cave_time_stat_stop);
+
+	t = rdtsc();
+	p->data[type] = t;
+}
+
+static inline void stat_add_sample(void)
+{
+	struct cave_time_stat *start = this_cpu_ptr(&cave_time_stat_start);
+	struct cave_time_stat *stop = this_cpu_ptr(&cave_time_stat_stop);
+	struct cave_time_stat *p = this_cpu_ptr(&cave_time_stat_val);
+
+#define TIME_MEASURE(s) do {						\
+		p->data[s] = p->data[s] + (stop->data[s] - start->data[s]); \
+		start->data[s] = 0;					\
+		stop->data[s] = 0;					\
+	} while (0)
+
+	TIME_MEASURE(T_LOCK);
+	TIME_MEASURE(T_WAIT_VOLTAGE);
+	p->total++;
+#undef TIME_MEASURE
+}
+#else
+static inline void stat_start_sample(enum timestamp type)
+{
+}
+
+static inline void stat_stop_sample(enum timestamp type)
+{
+}
+
+static inline void stat_add_sample(void)
+{
+}
+#endif
+
 static volatile int cave_enabled = 0;
 static DEFINE_SPINLOCK(cave_lock);
 DEFINE_PER_CPU(cave_data_t, context) = CAVE_NOMINAL_CONTEXT;
@@ -61,6 +131,42 @@ static int stat_samples[3] = { 0, 0, 0 };
 
 #define INC(x)	do { x++; } while (0)
 
+static struct hrtimer stats_hrtimer;
+static ktime_t stats_period_time;
+
+static enum hrtimer_restart stats_gather(struct hrtimer *timer)
+{
+#ifdef CONFIG_UNISERVER_CAVE_TIME_STATS
+	int i;
+	int cpu;
+#endif
+
+	unsigned long flags;
+	struct cave_stat new_stat;
+
+	spin_lock_irqsave(&cave_lock, flags);
+	WARN_ON(!cave_enabled);
+	new_stat = cave_stat;
+	memset(&cave_stat, 0, sizeof(struct cave_stat));
+#ifdef CONFIG_UNISERVER_CAVE_TIME_STATS
+	memset(&cave_time_stat, 0, sizeof(struct cave_time_stat));
+	for_each_possible_cpu(cpu) {
+		struct cave_time_stat *p = per_cpu_ptr(&cave_time_stat_val, cpu);
+		if (p->total != 0) {
+			for (i = T_BEGIN; i < T_END; i++)
+				cave_time_stat.data[i] += p->data[i];
+			cave_time_stat.total += p->total;
+		}
+		memset(p, 0, sizeof(struct cave_time_stat));
+	}
+	if (cave_time_stat.total != 0)
+		for (i = T_BEGIN; i < T_END; i++)
+			cave_time_stat.data[i] /= cave_time_stat.total;
+#endif
+
+	spin_unlock_irqrestore(&cave_lock, flags);
+
+	spin_lock_irqsave(&cave_stat_avg_lock, flags);
 #define __RUNNING_AVG_STAT(d, s, n, x)		\
 	d.x = (d.x * (n) + s.x) / ((n) + 1)
 #define RUNNING_AVG_STAT(d, s, n, l)		\
@@ -74,24 +180,33 @@ static int stat_samples[3] = { 0, 0, 0 };
 	__RUNNING_AVG_STAT(d, s, n, locked);	\
 	n++;
 
-static struct hrtimer stats_hrtimer;
-static ktime_t stats_period_time;
-
-static enum hrtimer_restart stats_gather(struct hrtimer *timer)
-{
-	unsigned long flags;
-	struct cave_stat new_stat;
-
-	spin_lock_irqsave(&cave_lock, flags);
-	WARN_ON(!cave_enabled);
-	new_stat = cave_stat;
-	memset(&cave_stat, 0, sizeof(struct cave_stat));
-	spin_unlock_irqrestore(&cave_lock, flags);
-
-	spin_lock_irqsave(&cave_stat_avg_lock, flags);
 	RUNNING_AVG_STAT(cave_stat_avg[0], new_stat, stat_samples[0], 1 * CAVE_STATS_MINUTE);
 	RUNNING_AVG_STAT(cave_stat_avg[1], new_stat, stat_samples[1], 5 * CAVE_STATS_MINUTE);
 	RUNNING_AVG_STAT(cave_stat_avg[2], new_stat, stat_samples[2], 10 * CAVE_STATS_MINUTE);
+
+#undef __RUNNING_AVG_STAT
+#undef RUNNING_AVG_STAT
+
+#ifdef CONFIG_UNISERVER_CAVE_TIME_STATS
+#define __RUNNING_AVG_TIME_STAT(d, s, n, x) do {			\
+		d.data[x] = (d.data[x] * (n) + s.data[x]) / ((n) + 1);	\
+	} while (0)
+#define RUNNING_AVG_TIME_STAT(d, s, n, l) do {			\
+		if (n == l)					\
+			n--;					\
+									\
+		__RUNNING_AVG_TIME_STAT(d, s, n, T_LOCK);		\
+		__RUNNING_AVG_TIME_STAT(d, s, n, T_WAIT_VOLTAGE);	\
+		n++;							\
+		d.total += s.total;					\
+	} while (0)
+
+	RUNNING_AVG_TIME_STAT(cave_time_stat_avg[0], cave_time_stat, time_stat_samples[0], 1 * CAVE_STATS_MINUTE);
+	RUNNING_AVG_TIME_STAT(cave_time_stat_avg[1], cave_time_stat, time_stat_samples[1], 5 * CAVE_STATS_MINUTE);
+	RUNNING_AVG_TIME_STAT(cave_time_stat_avg[2], cave_time_stat, time_stat_samples[2], 10 * CAVE_STATS_MINUTE);
+#undef __RUNNING_AVG_TIME_STAT
+#undef RUNNING_AVG_TIME_STAT
+#endif
 	spin_unlock_irqrestore(&cave_stat_avg_lock, flags);
 
 	hrtimer_forward_now(&stats_hrtimer, stats_period_time);
@@ -101,11 +216,19 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 
 static void stats_init(void)
 {
+
 	memset(&cave_stat, 0, sizeof(struct cave_stat));
 	memset(cave_stat_avg, 0, sizeof(cave_stat_avg));
 	stat_samples[0] = 0;
 	stat_samples[1] = 0;
 	stat_samples[2] = 0;
+#ifdef CONFIG_UNISERVER_CAVE_TIME_STATS
+	memset(&cave_time_stat, 0, sizeof(struct cave_time_stat));
+	memset(&cave_time_stat_avg, 0, sizeof(cave_time_stat_avg));
+	time_stat_samples[0] = 0;
+	time_stat_samples[1] = 0;
+	time_stat_samples[2] = 0;
+#endif
 
 	stats_period_time = ktime_set(CAVE_STATS_TIMER_PERIOD, 0);
 	hrtimer_init(&stats_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
@@ -250,10 +373,13 @@ static void _cave_switch(cave_data_t new_context)
 	if (!cave_enabled)
 		return;
 
+	stat_start_sample(T_LOCK);
 	while (!spin_trylock_irqsave(&cave_lock, flags)) {
 		done++;
 		cpu_relax();
 	}
+
+	stat_add_sample();
 
 	if (done)
 		INC(cave_stat.locked);
@@ -269,9 +395,13 @@ static void _cave_switch(cave_data_t new_context)
 	}
 
 	spin_unlock_irqrestore(&cave_lock, flags);
+	stat_stop_sample(T_LOCK);
 
-	if (new_voltage > curr_voltage)
+	if (new_voltage > curr_voltage) {
+		stat_start_sample(T_WAIT_VOLTAGE);
 		wait_voltage(new_context.voltage);
+		stat_stop_sample(T_WAIT_VOLTAGE);
+	}
 }
 
 __visible void cave_entry_switch(void)
@@ -372,6 +502,8 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 		FIXED_STAT(stat[2], FSHIFT);
 		FIXED_STAT(stat[3], FSHIFT);
 
+#undef __FIXED_STAT
+#undef FIXED_STAT
 #define S(x)	STAT_INT(x), STAT_FRAC(x)
 
 		ret += sprintf(buf + ret, "locked "
@@ -398,8 +530,6 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 			       "%2ld.%02ld %2ld.%02ld %2ld.%02ld %2ld.%02ld\n",
 			       S(stat[0].skip_slow), S(stat[1].skip_slow),
 			       S(stat[2].skip_slow), S(stat[3].skip_slow));
-#undef __FIXED_STAT
-#undef FIXED_STAT
 #undef S
 	}
 
@@ -748,6 +878,92 @@ ssize_t debug_store(struct kobject *kobj, struct kobj_attribute *attr,
 	return count;
 }
 
+#ifdef CONFIG_UNISERVER_CAVE_TIME_STATS
+static int _print_cave_time_stats(char *buf, struct cave_time_stat *stat, const bool raw)
+{
+	size_t ret = 0;
+	unsigned long long time_total[4];
+
+	time_total[0] = stat[0].data[T_LOCK] + stat[0].data[T_WAIT_VOLTAGE] + 1;
+	time_total[1] = stat[1].data[T_LOCK] + stat[1].data[T_WAIT_VOLTAGE] + 1;
+	time_total[2] = stat[2].data[T_LOCK] + stat[2].data[T_WAIT_VOLTAGE] + 1;
+	time_total[3] = stat[3].data[T_LOCK] + stat[3].data[T_WAIT_VOLTAGE] + 1;
+
+	if (raw) {
+#define S(x)		    \
+		stat[0].data[x], \
+		stat[1].data[x], \
+		stat[2].data[x], \
+		stat[3].data[x]
+
+		ret += sprintf(buf + ret, "lock %lld %lld %lld %lld\n", S(T_LOCK));
+		ret += sprintf(buf + ret, "wait_voltage %lld %lld %lld %lld\n", S(T_WAIT_VOLTAGE));
+#undef S
+	}
+	else {
+#define __FIXED_STAT(x, d, s) do {					\
+			x[d].data[s] = 100 * (x[d].data[s] << FSHIFT) / time_total[d]; \
+		} while (0)
+#define FIXED_STAT(x, d) do {				\
+			__FIXED_STAT(x, d, T_LOCK);	\
+			__FIXED_STAT(x, d, T_WAIT_VOLTAGE);	\
+		} while (0)
+
+		FIXED_STAT(stat, 0);
+		FIXED_STAT(stat, 1);
+		FIXED_STAT(stat, 2);
+		FIXED_STAT(stat, 3);
+#undef __FIXED_STAT
+#undef FIXED_STAT
+#define S(x, d)    STAT_INT(x[0].data[d]), STAT_FRAC(x[0].data[d])	\
+			,STAT_INT(x[1].data[d]), STAT_FRAC(x[1].data[d]) \
+			,STAT_INT(x[2].data[d]), STAT_FRAC(x[2].data[d]) \
+			,STAT_INT(x[3].data[d]), STAT_FRAC(x[3].data[d])
+#define PRINT(name, type) \
+		ret += sprintf(buf + ret, name " "			\
+			       "%2lld.%02lld %2lld.%02lld %2lld.%02lld %2lld.%02lld\n", \
+			       S(stat, type));
+
+		PRINT("lock", T_LOCK);
+		PRINT("wait_voltage", T_WAIT_VOLTAGE);
+#undef S
+#undef PRINT
+	}
+
+	return ret;
+}
+
+static
+ssize_t time_stats_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	int ret = 0;
+
+	unsigned long flags;
+	int enabled;
+
+	struct cave_time_stat time_stat[4];
+
+	spin_lock_irqsave(&cave_lock, flags);
+	enabled = cave_enabled;
+	if (enabled)
+		time_stat[0] = cave_time_stat;
+	spin_unlock_irqrestore(&cave_lock, flags);
+
+	spin_lock_irqsave(&cave_stat_avg_lock, flags);
+	time_stat[1] = cave_time_stat_avg[0];
+	time_stat[2] = cave_time_stat_avg[1];
+	time_stat[3] = cave_time_stat_avg[2];
+	spin_unlock_irqrestore(&cave_stat_avg_lock, flags);
+
+	if (enabled) {
+		ret += _print_cave_time_stats(buf + ret, time_stat, false);
+		ret += _print_cave_time_stats(buf + ret, time_stat, true);
+	}
+
+	return ret;
+}
+#endif
+
 KERNEL_ATTR_RW(enable);
 KERNEL_ATTR_RO(stats);
 KERNEL_ATTR_RO(raw_stats);
@@ -760,6 +976,9 @@ KERNEL_ATTR_RW(kernel_voffset);
 KERNEL_ATTR_RW(userspace_voffset);
 #endif
 KERNEL_ATTR_RW(debug);
+#ifdef CONFIG_UNISERVER_CAVE_TIME_STATS
+KERNEL_ATTR_RO(time_stats);
+#endif
 
 static struct attribute_group attr_group = {
 	.name = "cave",
@@ -776,6 +995,9 @@ static struct attribute_group attr_group = {
 		&userspace_voffset_attr.attr,
 #endif
 		&debug_attr.attr,
+#ifdef CONFIG_UNISERVER_CAVE_TIME_STATS
+		&time_stats_attr.attr,
+#endif
 		NULL
 	}
 };
