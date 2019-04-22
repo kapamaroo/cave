@@ -303,11 +303,6 @@ static void write_voltage_msr(long new_voltage)
 
 	new_voffset = VOFFSET_OF(new_voltage);
 	write_voffset_msr(new_voffset);
-
-	if (unlikely(new_voltage != voltage_cached)) {
-		WARN_ON_ONCE(1);
-		voltage_cached = new_voltage;
-	}
 }
 
 static long read_voltage_cached(void)
@@ -357,13 +352,11 @@ static long select_voltage(long curr_vmin, cave_data_t my_context)
 		INC(cave_stat.skip_slow);
 	else if (new_voltage < curr_vmin)
 		INC(cave_stat.dec);
-	else
-		WARN_ON(1);
 
 	return new_voltage;
 }
 
-static void _cave_switch(cave_data_t new_context)
+static inline void _cave_switch(cave_data_t new_context)
 {
 	unsigned long flags;
 	long new_voltage;
