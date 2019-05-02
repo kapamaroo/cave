@@ -210,19 +210,10 @@ static void wait_voltage(long new_voltage)
 		cpu_relax();
 }
 
-static long select_voltage(long curr_vmin, cave_data_t my_context)
+static long select_voltage(void)
 {
-	long new_voltage = my_context.voltage;
+    long new_voltage = 0;
 	int i;
-
-	if (new_voltage == curr_vmin) {
-		INC(cave_stat.skip_fast);
-		return new_voltage;
-	}
-	else if (new_voltage > curr_vmin) {
-		INC(cave_stat.inc);
-		return new_voltage;
-	}
 
 	for_each_possible_cpu(i) {
 		cave_data_t tmp = per_cpu(context, i);
@@ -230,48 +221,69 @@ static long select_voltage(long curr_vmin, cave_data_t my_context)
 			new_voltage = tmp.voltage;
 	}
 
-	if (new_voltage == curr_vmin)
-		INC(cave_stat.skip_slow);
-	else if (new_voltage < curr_vmin)
-		INC(cave_stat.dec);
-	else
-		WARN_ON(1);
-
 	return new_voltage;
 }
 
-static void _cave_switch(cave_data_t new_context)
+static inline void _cave_switch(cave_data_t new_context)
 {
 	unsigned long flags;
-	long new_voltage;
+	long new_voltage = new_context.voltage;
 	long curr_voltage;
+        long selected_voltage;
 	int done = 0;
 
 	if (!cave_enabled)
 		return;
 
-	while (!spin_trylock_irqsave(&cave_lock, flags)) {
-		done++;
-		cpu_relax();
-	}
-
-	if (done)
-		INC(cave_stat.locked);
-
 	this_cpu_write(context, new_context);
 
-	curr_voltage = read_voltage_cached();
-	new_voltage = select_voltage(curr_voltage, new_context);
+        spin_lock_irqsave(&cave_lock, flags);
+        curr_voltage = read_voltage_cached();
+ retry:
+        /* increase voltage immediately */
+        if (new_voltage > curr_voltage) {
+            write_voltage_cached(new_voltage);
+            write_voltage_msr(new_voltage);
 
-	if (new_voltage != curr_voltage) {
-		write_voltage_cached(new_voltage);
-		write_voltage_msr(new_voltage);
+            spin_unlock_irqrestore(&cave_lock, flags);
+
+            wait_voltage(new_voltage);
+
+            INC(cave_stat.inc);
+            return;
+	}
+        spin_unlock_irqrestore(&cave_lock, flags);
+
+	if (new_voltage == curr_voltage) {
+		INC(cave_stat.skip_fast);
+		return new_voltage;
 	}
 
-	spin_unlock_irqrestore(&cave_lock, flags);
+	selected_voltage = select_voltage();
 
-	if (new_voltage > curr_voltage)
-		wait_voltage(new_context.voltage);
+        if (selected_voltage == curr_voltage) {
+            INC(cave_stat.skip_slow);
+            return;
+        }
+
+        spin_lock_irqsave(&cave_lock, flags);
+        /* confirm that the decision is valid
+           and the observed voltage has not been changed
+        */
+        curr_voltage = read_voltage_cached();
+	if (selected_voltage != curr_voltage) {
+            /* skip decrease voltage when another CPU increased / decreased
+               the voltage when we were deciding
+            */
+            spin_unlock_irqrestore(&cave_lock, flags);
+            return;
+        }
+
+        write_voltage_cached(selected_voltage);
+        write_voltage_msr(selected_voltage);
+
+        spin_unlock_irqrestore(&cave_lock, flags);
+        INC(cave_stat.dec);
 }
 
 __visible void cave_entry_switch(void)
