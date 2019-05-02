@@ -230,16 +230,14 @@ static inline void _cave_switch(cave_data_t new_context)
 	long new_voltage = new_context.voltage;
 	long curr_voltage;
         long selected_voltage;
-	int done = 0;
 
 	if (!cave_enabled)
 		return;
 
-	this_cpu_write(context, new_context);
-
         spin_lock_irqsave(&cave_lock, flags);
+	this_cpu_write(context, new_context);
         curr_voltage = read_voltage_cached();
- retry:
+
         /* increase voltage immediately */
         if (new_voltage > curr_voltage) {
             write_voltage_cached(new_voltage);
@@ -254,36 +252,62 @@ static inline void _cave_switch(cave_data_t new_context)
 	}
         spin_unlock_irqrestore(&cave_lock, flags);
 
+        /* if another CPU managed to change voltage before the following check,
+         * we may keep an out-of-date curr_voltage value. In any case the other
+         * CPU has observed / considered our new_voltage during its decision.
+         * The out-of-date curr_voltage is covered in all of the following
+         * possible cases:
+         *
+         * increased curr_voltage:
+         * 	The other CPU holds the most constrained voltage value, we can
+         * 	simply skip any voltage change.
+         *
+         * decreased curr_voltage:
+         * 	The other CPU has released the last most constrained voltage
+         * 	value and went through the lockless selection. The decreased
+         * 	voltage is >= to our new_voltage, we can simply skip any voltage
+         * 	changes.
+         */
 	if (new_voltage == curr_voltage) {
 		INC(cave_stat.skip_fast);
-		return new_voltage;
+		return;
 	}
 
+        /*
+         * new_voltage < curr_voltage
+         *
+         * We may observe newer contexts from other CPUs that may lead to
+         * increase of voltage instead of decrease. Other CPUs that may try to
+         * change voltage are going to decide upon the newer voltage values.
+         */
 	selected_voltage = select_voltage();
 
-        if (selected_voltage == curr_voltage) {
+        /* The constrained voltage resides on another CPU and remains the same.
+         * In the case we observe a selection greater than the current voltage,
+         * another CPU has set the voltage constraint higher.
+         *
+         * skip voltage decrease, the other CPU increases the voltage.
+         */
+
+        if (selected_voltage >= curr_voltage) {
             INC(cave_stat.skip_slow);
             return;
         }
 
+        /* selected_voltage < curr_voltage */
+
         spin_lock_irqsave(&cave_lock, flags);
         /* confirm that the decision is valid
-           and the observed voltage has not been changed
-        */
+         * and the observed voltage has not been changed
+         */
         curr_voltage = read_voltage_cached();
-	if (selected_voltage != curr_voltage) {
-            /* skip decrease voltage when another CPU increased / decreased
-               the voltage when we were deciding
-            */
-            spin_unlock_irqrestore(&cave_lock, flags);
-            return;
+        selected_voltage = select_voltage();
+        if (selected_voltage < curr_voltage) {
+            write_voltage_cached(selected_voltage);
+            write_voltage_msr(selected_voltage);
+            INC(cave_stat.dec);
         }
-
-        write_voltage_cached(selected_voltage);
-        write_voltage_msr(selected_voltage);
-
         spin_unlock_irqrestore(&cave_lock, flags);
-        INC(cave_stat.dec);
 }
 
 __visible void cave_entry_switch(void)
