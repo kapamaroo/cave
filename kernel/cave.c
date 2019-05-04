@@ -229,7 +229,10 @@ static inline void _cave_switch(cave_data_t new_context)
 	unsigned long flags;
 	long new_voltage = new_context.voltage;
 	long curr_voltage;
+	long updated_voltage;
 	long selected_voltage;
+	unsigned long long my_ref;
+	static unsigned long long ref = 0;
 
 	if (!cave_enabled)
 		return;
@@ -250,6 +253,7 @@ static inline void _cave_switch(cave_data_t new_context)
 		INC(cave_stat.inc);
 		return;
 	}
+	my_ref = ref++;
 	spin_unlock_irqrestore(&cave_lock, flags);
 
 	/* if another CPU managed to change voltage before the following check,
@@ -297,16 +301,43 @@ static inline void _cave_switch(cave_data_t new_context)
 	/* selected_voltage < curr_voltage */
 
 	spin_lock_irqsave(&cave_lock, flags);
-        /* confirm that the decision is valid
-         * and the observed voltage has not been changed
-         */
-        curr_voltage = read_voltage_cached();
-        selected_voltage = select_voltage();
-        if (selected_voltage < curr_voltage) {
-            write_voltage_cached(selected_voltage);
-            write_voltage_msr(selected_voltage);
-            INC(cave_stat.dec);
-        }
+	/* We want to decrease voltage (this CPU was the most constrained).
+	 *
+	 * updated_voltage > curr_voltage
+	 * 	another CPU has the highest voltage constraint and increased it.
+	 * 	skip decrease
+	 *
+	 * updated_voltage < curr_voltage
+	 * 	another CPU has decreased the voltage considering our constraint
+	 * 	on the decision.
+	 * 	skip decrease
+	 *
+	 * updated_voltage == curr_voltage
+	 * 	1. None of the other CPUs crossed an entry / exit point.
+	 * 	   selected_voltage is valid
+	 * 	2. Some other CPUs have skipped decreasing the voltage or
+	 * 	   increased it. This means that another CPU is the most
+	 * 	   constrained now with >= voltage value.
+	 * 	   selected_voltage is out-of-date
+	 */
+	updated_voltage = read_voltage_cached();
+	if (updated_voltage == curr_voltage) {
+		if (my_ref != ref) {
+			/* case 2 */
+			selected_voltage = select_voltage();
+			if (selected_voltage >= updated_voltage) {
+				INC(cave_stat.skip_slow);
+				goto unlock;
+			}
+		}
+
+		write_voltage_cached(selected_voltage);
+		write_voltage_msr(selected_voltage);
+		INC(cave_stat.dec);
+	}
+	else
+		INC(cave_stat.skip_slow);
+ unlock:
 	spin_unlock_irqrestore(&cave_lock, flags);
 }
 
