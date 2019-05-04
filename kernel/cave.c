@@ -212,7 +212,7 @@ static void wait_voltage(long new_voltage)
 
 static long select_voltage(void)
 {
-    long new_voltage = 0;
+	long new_voltage = 0;
 	int i;
 
 	for_each_possible_cpu(i) {
@@ -229,74 +229,74 @@ static inline void _cave_switch(cave_data_t new_context)
 	unsigned long flags;
 	long new_voltage = new_context.voltage;
 	long curr_voltage;
-        long selected_voltage;
+	long selected_voltage;
 
 	if (!cave_enabled)
 		return;
 
-        spin_lock_irqsave(&cave_lock, flags);
+	spin_lock_irqsave(&cave_lock, flags);
 	this_cpu_write(context, new_context);
-        curr_voltage = read_voltage_cached();
+	curr_voltage = read_voltage_cached();
 
-        /* increase voltage immediately */
-        if (new_voltage > curr_voltage) {
-            write_voltage_cached(new_voltage);
-            write_voltage_msr(new_voltage);
+	/* increase voltage immediately */
+	if (new_voltage > curr_voltage) {
+		write_voltage_cached(new_voltage);
+		write_voltage_msr(new_voltage);
 
-            spin_unlock_irqrestore(&cave_lock, flags);
+		spin_unlock_irqrestore(&cave_lock, flags);
 
-            wait_voltage(new_voltage);
+		wait_voltage(new_voltage);
 
-            INC(cave_stat.inc);
-            return;
+		INC(cave_stat.inc);
+		return;
 	}
-        spin_unlock_irqrestore(&cave_lock, flags);
+	spin_unlock_irqrestore(&cave_lock, flags);
 
-        /* if another CPU managed to change voltage before the following check,
-         * we may keep an out-of-date curr_voltage value. In any case the other
-         * CPU has observed / considered our new_voltage during its decision.
-         * The out-of-date curr_voltage is covered in all of the following
-         * possible cases:
-         *
-         * increased curr_voltage:
-         * 	The other CPU holds the most constrained voltage value, we can
-         * 	simply skip any voltage change.
-         *
-         * decreased curr_voltage:
-         * 	The other CPU has released the last most constrained voltage
-         * 	value and went through the lockless selection. The decreased
-         * 	voltage is >= to our new_voltage, we can simply skip any voltage
-         * 	changes.
-         */
+	/* if another CPU managed to change voltage before the following check,
+	 * we may keep an out-of-date curr_voltage value. In any case the other
+	 * CPU has observed / considered our new_voltage during its decision.
+	 * The out-of-date curr_voltage is covered in all of the following
+	 * possible cases:
+	 *
+	 * increased curr_voltage:
+	 * 	The other CPU holds the most constrained voltage value, we can
+	 * 	simply skip any voltage change.
+	 *
+	 * decreased curr_voltage:
+	 * 	The other CPU has released the last most constrained voltage
+	 * 	value and went through the lockless selection. The decreased
+	 * 	voltage is >= to our new_voltage, we can simply skip any voltage
+	 * 	changes.
+	 */
 	if (new_voltage == curr_voltage) {
 		INC(cave_stat.skip_fast);
 		return;
 	}
 
-        /*
-         * new_voltage < curr_voltage
-         *
-         * We may observe newer contexts from other CPUs that may lead to
-         * increase of voltage instead of decrease. Other CPUs that may try to
-         * change voltage are going to decide upon the newer voltage values.
-         */
+	/*
+	 * new_voltage < curr_voltage
+	 *
+	 * We may observe newer contexts from other CPUs that may lead to
+	 * increase of voltage instead of decrease. Other CPUs that may try to
+	 * change voltage are going to decide upon the newer voltage values.
+	 */
 	selected_voltage = select_voltage();
 
-        /* The constrained voltage resides on another CPU and remains the same.
-         * In the case we observe a selection greater than the current voltage,
-         * another CPU has set the voltage constraint higher.
-         *
-         * skip voltage decrease, the other CPU increases the voltage.
-         */
+	/* The constrained voltage resides on another CPU and remains the same.
+	 * In the case we observe a selection greater than the current voltage,
+	 * another CPU has set the voltage constraint higher.
+	 *
+	 * skip voltage decrease, the other CPU increases the voltage.
+	 */
 
-        if (selected_voltage >= curr_voltage) {
-            INC(cave_stat.skip_slow);
-            return;
-        }
+	if (selected_voltage >= curr_voltage) {
+		INC(cave_stat.skip_slow);
+		return;
+	}
 
-        /* selected_voltage < curr_voltage */
+	/* selected_voltage < curr_voltage */
 
-        spin_lock_irqsave(&cave_lock, flags);
+	spin_lock_irqsave(&cave_lock, flags);
         /* confirm that the decision is valid
          * and the observed voltage has not been changed
          */
@@ -307,7 +307,7 @@ static inline void _cave_switch(cave_data_t new_context)
             write_voltage_msr(selected_voltage);
             INC(cave_stat.dec);
         }
-        spin_unlock_irqrestore(&cave_lock, flags);
+	spin_unlock_irqrestore(&cave_lock, flags);
 }
 
 __visible void cave_entry_switch(void)
@@ -379,11 +379,11 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 	stat[3].total = stat[3].inc + stat[3].dec + stat[3].skip + 1;
 
 	if (raw) {
-#define S(x)		   \
-		stat[0].x, \
-		stat[1].x, \
-		stat[2].x, \
-		stat[3].x
+#define S(x)					\
+		stat[0].x,			\
+			stat[1].x,		\
+			stat[2].x,		\
+			stat[3].x
 
 		ret += sprintf(buf + ret, "locked %ld %ld %ld %ld\n", S(locked));
 		ret += sprintf(buf + ret, "inc %ld %ld %ld %ld\n", S(inc));
@@ -478,14 +478,14 @@ static int print_cave_stats(char *buf, const bool raw)
 #endif
 
 /* sysfs interface */
-#define KERNEL_ATTR_RW(_name) \
-static struct kobj_attribute _name##_attr = __ATTR_RW(_name)
+#define KERNEL_ATTR_RW(_name)						\
+	static struct kobj_attribute _name##_attr = __ATTR_RW(_name)
 
-#define KERNEL_ATTR_RO(_name) \
-static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
+#define KERNEL_ATTR_RO(_name)						\
+	static struct kobj_attribute _name##_attr = __ATTR_RO(_name)
 
-#define KERNEL_ATTR_WO(_name) \
-static struct kobj_attribute _name##_attr = __ATTR_WO(_name)
+#define KERNEL_ATTR_WO(_name)						\
+	static struct kobj_attribute _name##_attr = __ATTR_WO(_name)
 
 static
 ssize_t enable_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -499,7 +499,7 @@ ssize_t enable_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf
 
 static
 ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
-	               const char *buf, size_t count)
+		     const char *buf, size_t count)
 {
 	unsigned long flags;
 	int enable;
@@ -660,7 +660,7 @@ ssize_t kernel_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 		if (p->flags & (PF_KTHREAD | PF_WQ_WORKER))
 			p->cave_data = CAVE_KERNEL_CONTEXT;
 	write_unlock_irq(&tasklist_lock);
-out:
+ out:
 	spin_unlock_irqrestore(&cave_lock, flags);
 
 	return count;
@@ -710,7 +710,7 @@ ssize_t userspace_voffset_store(struct kobject *kobj, struct kobj_attribute *att
 		if (!(p->flags & (PF_KTHREAD | PF_WQ_WORKER)))
 			p->cave_data = CAVE_USERSPACE_CONTEXT;
 	write_unlock_irq(&tasklist_lock);
-out:
+ out:
 	spin_unlock_irqrestore(&cave_lock, flags);
 
 	return count;
@@ -822,20 +822,20 @@ int cave_init(void)
 	int err;
 	long voltage;
 
-        err = sysfs_create_group(kernel_kobj, &attr_group);
-        if (err) {
-                pr_err("cave: failed\n");
-                return err;
-        }
+	err = sysfs_create_group(kernel_kobj, &attr_group);
+	if (err) {
+		pr_err("cave: failed\n");
+		return err;
+	}
 
 	spin_lock_irqsave(&cave_lock, flags);
 
-        voltage = read_voltage_msr();
+	voltage = read_voltage_msr();
 	write_voltage_cached(CAVE_NOMINAL_VOLTAGE);
 	write_voltage_msr(CAVE_NOMINAL_VOLTAGE);
 	spin_unlock_irqrestore(&cave_lock, flags);
 
-        pr_warn("cave: msr voltage: %ld offset: %ld\n", voltage, -VOFFSET_OF(voltage));
+	pr_warn("cave: msr voltage: %ld offset: %ld\n", voltage, -VOFFSET_OF(voltage));
 
 	return 0;
 }
