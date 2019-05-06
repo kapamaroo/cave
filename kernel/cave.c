@@ -28,8 +28,12 @@ struct cave_stat {
 	long dec;
 	long skip_fast;
 	long skip_slow;
+	long skip_replay;
+	long skip_race;
 	long skip;
 	long locked;
+	long locked_inc;
+	long locked_dec;
 	long total;
 };
 
@@ -233,11 +237,25 @@ static inline void _cave_switch(cave_data_t new_context)
 	long selected_voltage;
 	unsigned long long my_ref;
 	static unsigned long long ref = 0;
+#if 1
+	bool done_inc = false;
+	bool done_dec = false;
+#endif
 
 	if (!cave_enabled)
 		return;
 
+#if 0
 	spin_lock_irqsave(&cave_lock, flags);
+#else
+	while (!spin_trylock_irqsave(&cave_lock, flags)) {
+		if (!done_inc) {
+			done_inc = true;
+			INC(cave_stat.locked_inc);
+		}
+	}
+#endif
+
 	this_cpu_write(context, new_context);
 	curr_voltage = read_voltage_cached();
 
@@ -300,7 +318,17 @@ static inline void _cave_switch(cave_data_t new_context)
 
 	/* selected_voltage < curr_voltage */
 
+#if 0
 	spin_lock_irqsave(&cave_lock, flags);
+#else
+	while (!spin_trylock_irqsave(&cave_lock, flags)) {
+		if (!done_dec) {
+			done_dec = true;
+			INC(cave_stat.locked_dec);
+		}
+	}
+#endif
+
 	/* We want to decrease voltage (this CPU was the most constrained).
 	 *
 	 * updated_voltage > curr_voltage
@@ -326,7 +354,7 @@ static inline void _cave_switch(cave_data_t new_context)
 			/* case 2 */
 			selected_voltage = select_voltage();
 			if (selected_voltage >= updated_voltage) {
-				INC(cave_stat.skip_slow);
+				INC(cave_stat.skip_replay);
 				goto unlock;
 			}
 		}
@@ -335,8 +363,9 @@ static inline void _cave_switch(cave_data_t new_context)
 		write_voltage_msr(selected_voltage);
 		INC(cave_stat.dec);
 	}
-	else
-		INC(cave_stat.skip_slow);
+	else {
+		INC(cave_stat.skip_race);
+	}
  unlock:
 	spin_unlock_irqrestore(&cave_lock, flags);
 }
@@ -399,7 +428,7 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 	int ret = 0;
 
 #define SKIP(x)					\
-	stat[x].skip = stat[x].skip_fast + stat[x].skip_slow
+	stat[x].skip = stat[x].skip_fast + stat[x].skip_slow + stat[x].skip_replay + stat[x].skip_race
 
 	SKIP(0);
 	SKIP(1);
@@ -424,11 +453,15 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 		ret += sprintf(buf + ret, #x " %ld %ld %ld %ld\n", S(x))
 
 		PRINT(locked);
+		PRINT(locked_inc);
+		PRINT(locked_dec);
 		PRINT(inc);
 		PRINT(dec);
 		PRINT(skip);
 		PRINT(skip_fast);
 		PRINT(skip_slow);
+		PRINT(skip_replay);
+		PRINT(skip_race);
 #undef PRINT
 #undef S
 	}
@@ -454,11 +487,15 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 			S(stat[0].x), S(stat[1].x), S(stat[2].x), S(stat[3].x))
 
 		PRINT(locked);
+		PRINT(locked_inc);
+		PRINT(locked_dec);
 		PRINT(inc);
 		PRINT(dec);
 		PRINT(skip);
 		PRINT(skip_fast);
 		PRINT(skip_slow);
+		PRINT(skip_replay);
+		PRINT(skip_race);
 
 #undef PRINT
 #undef S
