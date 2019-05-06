@@ -65,19 +65,6 @@ static int stat_samples[3] = { 0, 0, 0 };
 
 #define INC(x)	do { x++; } while (0)
 
-#define __RUNNING_AVG_STAT(d, s, n, x)		\
-	d.x = (d.x * (n) + s.x) / ((n) + 1)
-#define RUNNING_AVG_STAT(d, s, n, l)		\
-	if (n == l)				\
-		n--;				\
-						\
-	__RUNNING_AVG_STAT(d, s, n, inc);	\
-	__RUNNING_AVG_STAT(d, s, n, dec);	\
-	__RUNNING_AVG_STAT(d, s, n, skip_fast);	\
-	__RUNNING_AVG_STAT(d, s, n, skip_slow);	\
-	__RUNNING_AVG_STAT(d, s, n, locked);	\
-	n++;
-
 static struct hrtimer stats_hrtimer;
 static ktime_t stats_period_time;
 
@@ -92,11 +79,27 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 	memset(&cave_stat, 0, sizeof(struct cave_stat));
 	spin_unlock_irqrestore(&cave_lock, flags);
 
+#define __RUNNING_AVG_STAT(d, s, n, x)		\
+	d.x = (d.x * (n) + s.x) / ((n) + 1)
+#define RUNNING_AVG_STAT(d, s, n, l)		\
+	if (n == l)				\
+		n--;				\
+						\
+	__RUNNING_AVG_STAT(d, s, n, inc);	\
+	__RUNNING_AVG_STAT(d, s, n, dec);	\
+	__RUNNING_AVG_STAT(d, s, n, skip_fast);	\
+	__RUNNING_AVG_STAT(d, s, n, skip_slow);	\
+	__RUNNING_AVG_STAT(d, s, n, locked);	\
+	n++;
+
 	spin_lock_irqsave(&cave_stat_avg_lock, flags);
 	RUNNING_AVG_STAT(cave_stat_avg[0], new_stat, stat_samples[0], 1 * CAVE_STATS_MINUTE);
 	RUNNING_AVG_STAT(cave_stat_avg[1], new_stat, stat_samples[1], 5 * CAVE_STATS_MINUTE);
 	RUNNING_AVG_STAT(cave_stat_avg[2], new_stat, stat_samples[2], 10 * CAVE_STATS_MINUTE);
 	spin_unlock_irqrestore(&cave_stat_avg_lock, flags);
+
+#undef __RUNNING_AVG_STAT
+#undef RUNNING_AVG_STAT
 
 	hrtimer_forward_now(&stats_hrtimer, stats_period_time);
 
