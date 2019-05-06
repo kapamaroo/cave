@@ -398,10 +398,15 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 {
 	int ret = 0;
 
-	stat[0].skip = stat[0].skip_fast + stat[0].skip_slow;
-	stat[1].skip = stat[1].skip_fast + stat[1].skip_slow;
-	stat[2].skip = stat[2].skip_fast + stat[2].skip_slow;
-	stat[3].skip = stat[3].skip_fast + stat[3].skip_slow;
+#define SKIP(x)					\
+	stat[x].skip = stat[x].skip_fast + stat[x].skip_slow
+
+	SKIP(0);
+	SKIP(1);
+	SKIP(2);
+	SKIP(3);
+
+#undef SKIP
 
 	/* +1 in case everything is 0 */
 	stat[0].total = stat[0].inc + stat[0].dec + stat[0].skip + 1;
@@ -415,13 +420,16 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 			stat[1].x,		\
 			stat[2].x,		\
 			stat[3].x
+#define PRINT(x)							\
+		ret += sprintf(buf + ret, #x " %ld %ld %ld %ld\n", S(x))
 
-		ret += sprintf(buf + ret, "locked %ld %ld %ld %ld\n", S(locked));
-		ret += sprintf(buf + ret, "inc %ld %ld %ld %ld\n", S(inc));
-		ret += sprintf(buf + ret, "dec %ld %ld %ld %ld\n", S(dec));
-		ret += sprintf(buf + ret, "skip %ld %ld %ld %ld\n", S(skip));
-		ret += sprintf(buf + ret, "skip_fast %ld %ld %ld %ld\n", S(skip_fast));
-		ret += sprintf(buf + ret, "skip_slow %ld %ld %ld %ld\n", S(skip_slow));
+		PRINT(locked);
+		PRINT(inc);
+		PRINT(dec);
+		PRINT(skip);
+		PRINT(skip_fast);
+		PRINT(skip_slow);
+#undef PRINT
 #undef S
 	}
 	else {
@@ -440,34 +448,22 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 		FIXED_STAT(stat[3], FSHIFT);
 
 #define S(x)	STAT_INT(x), STAT_FRAC(x)
+#define PRINT(x)							\
+		ret += sprintf(buf + ret, #x " "			\
+			"%2ld.%02ld %2ld.%02ld %2ld.%02ld %2ld.%02ld\n", \
+			S(stat[0].x), S(stat[1].x), S(stat[2].x), S(stat[3].x))
 
-		ret += sprintf(buf + ret, "locked "
-			       "%2ld.%02ld %2ld.%02ld %2ld.%02ld %2ld.%02ld\n",
-			       S(stat[0].locked), S(stat[1].locked),
-			       S(stat[2].locked), S(stat[3].locked));
-		ret += sprintf(buf + ret, "inc "
-			       "%2ld.%02ld %2ld.%02ld %2ld.%02ld %2ld.%02ld\n",
-			       S(stat[0].inc), S(stat[1].inc),
-			       S(stat[2].inc), S(stat[3].inc));
-		ret += sprintf(buf + ret, "dec "
-			       "%2ld.%02ld %2ld.%02ld %2ld.%02ld %2ld.%02ld\n",
-			       S(stat[0].dec), S(stat[1].dec),
-			       S(stat[2].dec), S(stat[3].dec));
-		ret += sprintf(buf + ret, "skip "
-			       "%2ld.%02ld %2ld.%02ld %2ld.%02ld %2ld.%02ld\n",
-			       S(stat[0].skip), S(stat[1].skip),
-			       S(stat[2].skip), S(stat[3].skip));
-		ret += sprintf(buf + ret, "skip_fast "
-			       "%2ld.%02ld %2ld.%02ld %2ld.%02ld %2ld.%02ld\n",
-			       S(stat[0].skip_fast), S(stat[1].skip_fast),
-			       S(stat[2].skip_fast), S(stat[3].skip_fast));
-		ret += sprintf(buf + ret, "skip_slow "
-			       "%2ld.%02ld %2ld.%02ld %2ld.%02ld %2ld.%02ld\n",
-			       S(stat[0].skip_slow), S(stat[1].skip_slow),
-			       S(stat[2].skip_slow), S(stat[3].skip_slow));
+		PRINT(locked);
+		PRINT(inc);
+		PRINT(dec);
+		PRINT(skip);
+		PRINT(skip_fast);
+		PRINT(skip_slow);
+
+#undef PRINT
+#undef S
 #undef __FIXED_STAT
 #undef FIXED_STAT
-#undef S
 	}
 
 	return ret;
