@@ -81,15 +81,18 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 
 #define __RUNNING_AVG_STAT(d, s, n, x)		\
 	d.x = (d.x * (n) + s.x) / ((n) + 1)
-#define RUNNING_AVG_STAT(d, s, n, l)		\
-	if (n == l)				\
-		n--;				\
-						\
-	__RUNNING_AVG_STAT(d, s, n, inc);	\
-	__RUNNING_AVG_STAT(d, s, n, dec);	\
-	__RUNNING_AVG_STAT(d, s, n, skip_fast);	\
-	__RUNNING_AVG_STAT(d, s, n, skip_slow);	\
-	__RUNNING_AVG_STAT(d, s, n, locked);	\
+#define RUNNING_AVG_STAT(d, s, n, l)			\
+	if (n == l)					\
+		n--;					\
+							\
+	__RUNNING_AVG_STAT(d, s, n, locked_inc);	\
+	__RUNNING_AVG_STAT(d, s, n, locked_dec);	\
+	__RUNNING_AVG_STAT(d, s, n, inc);		\
+	__RUNNING_AVG_STAT(d, s, n, dec);		\
+	__RUNNING_AVG_STAT(d, s, n, skip_fast);		\
+	__RUNNING_AVG_STAT(d, s, n, skip_slow);		\
+	__RUNNING_AVG_STAT(d, s, n, skip_replay);	\
+	__RUNNING_AVG_STAT(d, s, n, skip_race);		\
 	n++;
 
 	spin_lock_irqsave(&cave_stat_avg_lock, flags);
