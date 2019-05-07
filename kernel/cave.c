@@ -440,6 +440,16 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 
 #undef SKIP
 
+#define LOCKED(x)				\
+	stat[x].locked = stat[x].locked_inc + stat[x].locked_dec
+
+	LOCKED(0);
+	LOCKED(1);
+	LOCKED(2);
+	LOCKED(3);
+
+#undef LOCKED
+
 	/* +1 in case everything is 0 */
 	stat[0].total = stat[0].inc + stat[0].dec + stat[0].skip + 1;
 	stat[1].total = stat[1].inc + stat[1].dec + stat[1].skip + 1;
@@ -471,12 +481,16 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 	else {
 #define __FIXED_STAT(d, x, __s) d.x = 100 * (d.x << __s) / d.total
 #define FIXED_STAT(d, __s)				\
+		__FIXED_STAT(d, locked,    __s);	\
+		__FIXED_STAT(d, locked_inc,    __s);	\
+		__FIXED_STAT(d, locked_dec,    __s);	\
 		__FIXED_STAT(d, inc,       __s);	\
 		__FIXED_STAT(d, dec,       __s);	\
+		__FIXED_STAT(d, skip,      __s);	\
 		__FIXED_STAT(d, skip_fast, __s);	\
 		__FIXED_STAT(d, skip_slow, __s);	\
-		__FIXED_STAT(d, skip,      __s);	\
-		__FIXED_STAT(d, locked,    __s);
+		__FIXED_STAT(d, skip_replay, __s);	\
+		__FIXED_STAT(d, skip_race, __s);
 
 		FIXED_STAT(stat[0], FSHIFT);
 		FIXED_STAT(stat[1], FSHIFT);
