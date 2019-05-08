@@ -23,6 +23,25 @@
 #define CORE_VOFFSET_VAL(__val)		(0x8000001100000000ULL | TO_VOFFSET_DATA(__val))
 #define CACHE_VOFFSET_VAL(__val)	(0x8000021100000000ULL | TO_VOFFSET_DATA(__val))
 
+enum cave_case {
+	CAVE_INC = 0,
+	SKIP_FAST,
+	SKIP_SLOW,
+	SKIP_REPLAY,
+	SKIP_RACE,
+	CAVE_DEC,
+	CAVE_CASES
+};
+
+static char *cave_stat_name[CAVE_CASES] = {
+	"inc",
+	"skip_fast",
+	"skip_slow",
+	"skip_replay",
+	"skip_race",
+	"dec"
+};
+
 struct cave_stat {
 	long inc;
 	long dec;
@@ -36,6 +55,29 @@ struct cave_stat {
 	long locked_dec;
 	long total;
 };
+
+#define CAVE_TIME_STATS
+
+#ifdef CAVE_TIME_STATS
+struct cave_time {
+	unsigned long long time[CAVE_CASES];
+	unsigned long long counter[CAVE_CASES];
+	unsigned long long wait_time;
+	unsigned long long wait_counter;
+};
+
+DEFINE_PER_CPU(struct cave_time, time_stats);
+#endif
+
+static inline void end_measure(unsigned long long start, enum cave_case c)
+{
+#ifdef CAVE_TIME_STATS
+	struct cave_time *t = this_cpu_ptr(&time_stats);
+
+	t->time[c] += rdtsc() - start;
+	t->counter[c]++;
+#endif
+}
 
 static volatile int cave_enabled = 0;
 static DEFINE_SPINLOCK(cave_lock);
@@ -111,6 +153,13 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 
 static void stats_init(void)
 {
+	int i;
+
+	for_each_possible_cpu(i) {
+		struct cave_time *t = per_cpu_ptr(&time_stats, i);
+		memset(t, 0, sizeof(struct cave_time));
+	}
+
 	memset(&cave_stat, 0, sizeof(struct cave_stat));
 	memset(cave_stat_avg, 0, sizeof(cave_stat_avg));
 	stat_samples[0] = 0;
@@ -216,8 +265,20 @@ static void wait_voltage(long new_voltage)
 {
 	long curr_voltage;
 
+#ifdef CAVE_TIME_STATS
+	unsigned long long start;
+	struct cave_time *t = this_cpu_ptr(&time_stats);
+
+	start = rdtsc();
+#endif
+
 	while (new_voltage > (curr_voltage = read_voltage_msr()))
 		cpu_relax();
+
+#ifdef CAVE_TIME_STATS
+	t->wait_time += rdtsc() - start;
+	t->wait_counter++;
+#endif
 }
 
 static long select_voltage(void)
@@ -243,9 +304,18 @@ static inline void _cave_switch(cave_data_t new_context)
 	long selected_voltage;
 	unsigned long long my_ref;
 	static unsigned long long ref = 0;
+
 #if 1
 	bool done_inc = false;
 	bool done_dec = false;
+#endif
+
+#ifdef CAVE_TIME_STATS
+	unsigned long long start;
+
+	start = rdtsc();
+#else
+#define start	0
 #endif
 
 	if (!cave_enabled)
@@ -275,6 +345,7 @@ static inline void _cave_switch(cave_data_t new_context)
 		wait_voltage(new_voltage);
 
 		INC(cave_stat.inc);
+		end_measure(start, CAVE_INC);
 		return;
 	}
 	my_ref = ref++;
@@ -298,6 +369,7 @@ static inline void _cave_switch(cave_data_t new_context)
 	 */
 	if (new_voltage == curr_voltage) {
 		INC(cave_stat.skip_fast);
+		end_measure(start, SKIP_FAST);
 		return;
 	}
 
@@ -319,6 +391,7 @@ static inline void _cave_switch(cave_data_t new_context)
 
 	if (selected_voltage >= curr_voltage) {
 		INC(cave_stat.skip_slow);
+		end_measure(start, SKIP_SLOW);
 		return;
 	}
 
@@ -355,25 +428,34 @@ static inline void _cave_switch(cave_data_t new_context)
 	 * 	   selected_voltage is out-of-date
 	 */
 	updated_voltage = read_voltage_cached();
-	if (updated_voltage == curr_voltage) {
-		if (my_ref != ref) {
-			/* case 2 */
-			selected_voltage = select_voltage();
-			if (selected_voltage >= updated_voltage) {
-				INC(cave_stat.skip_replay);
-				goto unlock;
-			}
-		}
 
-		write_voltage_cached(selected_voltage);
-		write_voltage_msr(selected_voltage);
-		INC(cave_stat.dec);
-	}
-	else {
+	if (updated_voltage != curr_voltage) {
+		spin_unlock_irqrestore(&cave_lock, flags);
 		INC(cave_stat.skip_race);
+		end_measure(start, SKIP_RACE);
+		return;
 	}
- unlock:
+
+	if (my_ref != ref) {
+		/* case 2 */
+		selected_voltage = select_voltage();
+		if (selected_voltage >= updated_voltage) {
+			spin_unlock_irqrestore(&cave_lock, flags);
+			INC(cave_stat.skip_replay);
+			end_measure(start, SKIP_REPLAY);
+			return;
+		}
+	}
+
+	write_voltage_cached(selected_voltage);
+	write_voltage_msr(selected_voltage);
 	spin_unlock_irqrestore(&cave_lock, flags);
+	INC(cave_stat.dec);
+	end_measure(start, CAVE_DEC);
+
+#ifdef CAVE_TIME_STATS
+#undef start
+#endif
 }
 
 __visible void cave_entry_switch(void)
@@ -858,7 +940,63 @@ ssize_t voltage_show(struct kobject *kobj, struct kobj_attribute *attr, char *bu
 static
 ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
-	return 0;
+	int ret = 0;
+
+#ifdef CAVE_TIME_STATS
+	int i;
+	int j;
+
+	unsigned long long time = 0;
+	unsigned long long counter = 0;
+
+	struct cave_time t;
+
+	memset(&t, 0, sizeof(t));
+
+	for_each_possible_cpu(i) {
+		/* local copy */
+		struct cave_time c = *per_cpu_ptr(&time_stats, i);
+
+		for (j = 0; j < CAVE_CASES; j++) {
+			t.time[j] += c.time[j];
+			t.counter[j] += c.counter[j];
+		}
+		t.wait_time += c.wait_time;
+		t.wait_counter += c.wait_counter;
+	}
+
+#define F(x, t) 100 * ((x) << FSHIFT) / (t)
+#define S(x, t)	STAT_INT(F(x, t)), STAT_FRAC(F(x, t))
+#define FMT	"%2llu.%02llu"
+
+	for (j = 0; j < CAVE_CASES; j++) {
+		time += t.time[j];
+		counter += t.counter[j];
+	}
+
+	if (time == 0 || counter == 0)
+		return ret;
+
+	ret += sprintf(buf + ret, "total %llu\n",
+		       time / counter);
+
+	for (j = 0; j < CAVE_CASES; j++) {
+		ret += sprintf(buf + ret, "%s " FMT "\n", cave_stat_name[j],
+			       S(t.time[j], time));
+	}
+
+	if (t.wait_counter == 0)
+		return ret;
+
+	ret += sprintf(buf + ret, "wait_cycles %llu\n",
+		       t.wait_time / t.wait_counter);
+
+#undef FMT
+#undef S
+#undef F
+#endif
+
+	return ret;
 }
 
 static
