@@ -25,6 +25,7 @@
 
 enum cave_case {
 	CAVE_INC = 0,
+	SKIP_INC_WAIT,
 	SKIP_FAST,
 	SKIP_SLOW,
 	SKIP_REPLAY,
@@ -35,6 +36,7 @@ enum cave_case {
 
 static char *cave_stat_name[CAVE_CASES] = {
 	"inc",
+	"skip_inc_wait",
 	"skip_fast",
 	"skip_slow",
 	"skip_replay",
@@ -45,6 +47,7 @@ static char *cave_stat_name[CAVE_CASES] = {
 struct cave_stat {
 	long inc;
 	long dec;
+	long skip_inc_wait;
 	long skip_fast;
 	long skip_slow;
 	long skip_replay;
@@ -62,8 +65,8 @@ struct cave_stat {
 struct cave_time {
 	unsigned long long time[CAVE_CASES];
 	unsigned long long counter[CAVE_CASES];
-	unsigned long long wait_time;
-	unsigned long long wait_counter;
+	unsigned long long wait_target_time;
+	unsigned long long wait_target_counter;
 };
 
 DEFINE_PER_CPU(struct cave_time, time_stats);
@@ -89,7 +92,8 @@ static volatile int cave_kernel_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFF
 static volatile int cave_userspace_voffset __read_mostly = CAVE_DEFAULT_USERSPACE_VOFFSET;
 #endif
 static volatile int cave_max_voffset __read_mostly = 400;
-static volatile long voltage_cached = CAVE_NOMINAL_VOLTAGE;
+static volatile long target_voltage_cached = CAVE_NOMINAL_VOLTAGE;
+static volatile long curr_voltage = CAVE_NOMINAL_VOLTAGE;
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 static DEFINE_SPINLOCK(cave_stat_avg_lock);
@@ -228,9 +232,9 @@ static inline u64 read_voffset_msr(void)
 	return TO_VOFFSET_VAL(voffset);
 }
 
-static void write_voltage_cached(long new_voltage)
+static void write_target_voltage(long new_voltage)
 {
-	voltage_cached = new_voltage;
+	target_voltage_cached = new_voltage;
 }
 
 static void write_voltage_msr(long new_voltage)
@@ -240,15 +244,15 @@ static void write_voltage_msr(long new_voltage)
 	new_voffset = VOFFSET_OF(new_voltage);
 	write_voffset_msr(new_voffset);
 
-	if (unlikely(new_voltage != voltage_cached)) {
+	if (unlikely(new_voltage != target_voltage_cached)) {
 		WARN_ON_ONCE(1);
-		voltage_cached = new_voltage;
+		target_voltage_cached = new_voltage;
 	}
 }
 
-static long read_voltage_cached(void)
+static long read_target_voltage(void)
 {
-	return voltage_cached;
+	return target_voltage_cached;
 }
 
 static long read_voltage_msr(void)
@@ -261,10 +265,14 @@ static long read_voltage_msr(void)
 	return voltage_msr;
 }
 
-static void wait_voltage(long new_voltage)
+static void wait_curr_voltage(long new_voltage)
 {
-	long curr_voltage;
+	while (new_voltage > curr_voltage)
+		cpu_relax();
+}
 
+static void wait_target_voltage(long new_voltage)
+{
 #ifdef CAVE_TIME_STATS
 	unsigned long long start;
 	struct cave_time *t = this_cpu_ptr(&time_stats);
@@ -276,8 +284,8 @@ static void wait_voltage(long new_voltage)
 		cpu_relax();
 
 #ifdef CAVE_TIME_STATS
-	t->wait_time += rdtsc() - start;
-	t->wait_counter++;
+	t->wait_target_time += rdtsc() - start;
+	t->wait_target_counter++;
 #endif
 }
 
@@ -299,7 +307,7 @@ static inline void _cave_switch(cave_data_t new_context)
 {
 	unsigned long flags;
 	long new_voltage = new_context.voltage;
-	long curr_voltage;
+	long target_voltage;
 	long updated_voltage;
 	long selected_voltage;
 	unsigned long long my_ref;
@@ -333,16 +341,16 @@ static inline void _cave_switch(cave_data_t new_context)
 #endif
 
 	this_cpu_write(context, new_context);
-	curr_voltage = read_voltage_cached();
+	target_voltage = read_target_voltage();
 
 	/* increase voltage immediately */
-	if (new_voltage > curr_voltage) {
-		write_voltage_cached(new_voltage);
+	if (new_voltage > target_voltage) {
+		write_target_voltage(new_voltage);
 		write_voltage_msr(new_voltage);
 
 		spin_unlock_irqrestore(&cave_lock, flags);
 
-		wait_voltage(new_voltage);
+		wait_target_voltage(new_voltage);
 
 		INC(cave_stat.inc);
 		end_measure(start, CAVE_INC);
@@ -352,29 +360,29 @@ static inline void _cave_switch(cave_data_t new_context)
 	spin_unlock_irqrestore(&cave_lock, flags);
 
 	/* if another CPU managed to change voltage before the following check,
-	 * we may keep an out-of-date curr_voltage value. In any case the other
+	 * we may keep an out-of-date target_voltage value. In any case the other
 	 * CPU has observed / considered our new_voltage during its decision.
-	 * The out-of-date curr_voltage is covered in all of the following
+	 * The out-of-date target_voltage is covered in all of the following
 	 * possible cases:
 	 *
-	 * increased curr_voltage:
+	 * increased target_voltage:
 	 * 	The other CPU holds the most constrained voltage value, we can
 	 * 	simply skip any voltage change.
 	 *
-	 * decreased curr_voltage:
+	 * decreased target_voltage:
 	 * 	The other CPU has released the last most constrained voltage
 	 * 	value and went through the lockless selection. The decreased
 	 * 	voltage is >= to our new_voltage, we can simply skip any voltage
 	 * 	changes.
 	 */
-	if (new_voltage == curr_voltage) {
+	if (new_voltage == target_voltage) {
 		INC(cave_stat.skip_fast);
 		end_measure(start, SKIP_FAST);
 		return;
 	}
 
 	/*
-	 * new_voltage < curr_voltage
+	 * new_voltage < target_voltage
 	 *
 	 * We may observe newer contexts from other CPUs that may lead to
 	 * increase of voltage instead of decrease. Other CPUs that may try to
@@ -389,13 +397,13 @@ static inline void _cave_switch(cave_data_t new_context)
 	 * skip voltage decrease, the other CPU increases the voltage.
 	 */
 
-	if (selected_voltage >= curr_voltage) {
+	if (selected_voltage >= target_voltage) {
 		INC(cave_stat.skip_slow);
 		end_measure(start, SKIP_SLOW);
 		return;
 	}
 
-	/* selected_voltage < curr_voltage */
+	/* selected_voltage < target_voltage */
 
 #if 0
 	spin_lock_irqsave(&cave_lock, flags);
@@ -410,16 +418,16 @@ static inline void _cave_switch(cave_data_t new_context)
 
 	/* We want to decrease voltage (this CPU was the most constrained).
 	 *
-	 * updated_voltage > curr_voltage
+	 * updated_voltage > target_voltage
 	 * 	another CPU has the highest voltage constraint and increased it.
 	 * 	skip decrease
 	 *
-	 * updated_voltage < curr_voltage
+	 * updated_voltage < target_voltage
 	 * 	another CPU has decreased the voltage considering our constraint
 	 * 	on the decision.
 	 * 	skip decrease
 	 *
-	 * updated_voltage == curr_voltage
+	 * updated_voltage == target_voltage
 	 * 	1. None of the other CPUs crossed an entry / exit point.
 	 * 	   selected_voltage is valid
 	 * 	2. Some other CPUs have skipped decreasing the voltage or
@@ -427,9 +435,9 @@ static inline void _cave_switch(cave_data_t new_context)
 	 * 	   constrained now with >= voltage value.
 	 * 	   selected_voltage is out-of-date
 	 */
-	updated_voltage = read_voltage_cached();
+	updated_voltage = read_target_voltage();
 
-	if (updated_voltage != curr_voltage) {
+	if (updated_voltage != target_voltage) {
 		spin_unlock_irqrestore(&cave_lock, flags);
 		INC(cave_stat.skip_race);
 		end_measure(start, SKIP_RACE);
@@ -447,7 +455,7 @@ static inline void _cave_switch(cave_data_t new_context)
 		}
 	}
 
-	write_voltage_cached(selected_voltage);
+	write_target_voltage(selected_voltage);
 	write_voltage_msr(selected_voltage);
 	spin_unlock_irqrestore(&cave_lock, flags);
 	INC(cave_stat.dec);
@@ -681,7 +689,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 	if (enable) {
 		spin_lock_irqsave(&cave_lock, flags);
 		if (!cave_enabled) {
-			write_voltage_cached(CAVE_NOMINAL_VOLTAGE);
+			write_target_voltage(CAVE_NOMINAL_VOLTAGE);
 			write_voltage_msr(CAVE_NOMINAL_VOLTAGE);
 			stats_init();
 			cave_enabled = 1;
@@ -696,7 +704,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 		if (cave_enabled) {
 			cave_enabled = 0;
 			stats_clear();
-			write_voltage_cached(CAVE_NOMINAL_VOLTAGE);
+			write_target_voltage(CAVE_NOMINAL_VOLTAGE);
 			write_voltage_msr(CAVE_NOMINAL_VOLTAGE);
 			show_msg = true;
 		}
@@ -928,7 +936,7 @@ ssize_t voltage_show(struct kobject *kobj, struct kobj_attribute *attr, char *bu
 	long veff;
 
 	spin_lock_irqsave(&cave_lock, flags);
-	veff = read_voltage_cached();
+	veff = read_target_voltage();
 	spin_unlock_irqrestore(&cave_lock, flags);
 
 	ret += sprintf(buf + ret, "vmin %ld\n", veff);
@@ -963,8 +971,8 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 			time += c.time[j];
 			counter += c.counter[j];
 		}
-		t.wait_time += c.wait_time;
-		t.wait_counter += c.wait_counter;
+		t.wait_target_time += c.wait_target_time;
+		t.wait_target_counter += c.wait_target_counter;
 	}
 
 #define F(x, t) 100 * ((x) << FSHIFT) / (t)
@@ -974,7 +982,7 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	if (time == 0 || counter == 0)
 		return ret;
 
-	ret += sprintf(buf + ret, "total_cycles %llu\n", time / counter);
+	ret += sprintf(buf + ret, "avg/total_cycles %llu\n", time / counter);
 
 	for (j = 0; j < CAVE_CASES; j++) {
 		ret += sprintf(buf + ret, "%s %llu " FMT "\n", cave_stat_name[j],
@@ -982,12 +990,12 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 			       S(t.time[j], time));
 	}
 
-	if (t.wait_counter == 0)
-		return ret;
+	if (t.wait_target_counter != 0) {
+		ret += sprintf(buf + ret, "wait_target/cycles %llu\n", t.wait_target_time / t.wait_target_counter);
+		ret += sprintf(buf + ret, "wait_target/total%% " FMT "\n", S(t.wait_target_time, time));
+		ret += sprintf(buf + ret, "wait_target/inc%% " FMT "\n", S(t.wait_target_time, t.time[CAVE_INC]));
+	}
 
-	ret += sprintf(buf + ret, "wait_cycles %llu\n", t.wait_time / t.wait_counter);
-	ret += sprintf(buf + ret, "wait/cave%% " FMT "\n", S(t.wait_time, time));
-	ret += sprintf(buf + ret, "wait/cave_inc%% " FMT "\n", S(t.wait_time, t.time[CAVE_INC]));
 
 #undef FMT
 #undef S
@@ -1051,7 +1059,7 @@ int cave_init(void)
 	spin_lock_irqsave(&cave_lock, flags);
 
 	voltage = read_voltage_msr();
-	write_voltage_cached(CAVE_NOMINAL_VOLTAGE);
+	write_target_voltage(CAVE_NOMINAL_VOLTAGE);
 	write_voltage_msr(CAVE_NOMINAL_VOLTAGE);
 	spin_unlock_irqrestore(&cave_lock, flags);
 
