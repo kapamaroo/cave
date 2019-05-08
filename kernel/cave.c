@@ -960,6 +960,8 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 		for (j = 0; j < CAVE_CASES; j++) {
 			t.time[j] += c.time[j];
 			t.counter[j] += c.counter[j];
+			time += c.time[j];
+			counter += c.counter[j];
 		}
 		t.wait_time += c.wait_time;
 		t.wait_counter += c.wait_counter;
@@ -969,27 +971,23 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 #define S(x, t)	STAT_INT(F(x, t)), STAT_FRAC(F(x, t))
 #define FMT	"%2llu.%02llu"
 
-	for (j = 0; j < CAVE_CASES; j++) {
-		time += t.time[j];
-		counter += t.counter[j];
-	}
-
 	if (time == 0 || counter == 0)
 		return ret;
 
-	ret += sprintf(buf + ret, "total %llu\n",
-		       time / counter);
+	ret += sprintf(buf + ret, "total_cycles %llu\n", time / counter);
 
 	for (j = 0; j < CAVE_CASES; j++) {
-		ret += sprintf(buf + ret, "%s " FMT "\n", cave_stat_name[j],
+		ret += sprintf(buf + ret, "%s %llu " FMT "\n", cave_stat_name[j],
+			       t.time[j] / (t.counter[j] + 1),
 			       S(t.time[j], time));
 	}
 
 	if (t.wait_counter == 0)
 		return ret;
 
-	ret += sprintf(buf + ret, "wait_cycles %llu\n",
-		       t.wait_time / t.wait_counter);
+	ret += sprintf(buf + ret, "wait_cycles %llu\n", t.wait_time / t.wait_counter);
+	ret += sprintf(buf + ret, "wait/cave%% " FMT "\n", S(t.wait_time, time));
+	ret += sprintf(buf + ret, "wait/cave_inc%% " FMT "\n", S(t.wait_time, t.time[CAVE_INC]));
 
 #undef FMT
 #undef S
