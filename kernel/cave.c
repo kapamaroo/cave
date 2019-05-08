@@ -67,6 +67,8 @@ struct cave_time {
 	unsigned long long counter[CAVE_CASES];
 	unsigned long long wait_target_time;
 	unsigned long long wait_target_counter;
+	unsigned long long wait_curr_time;
+	unsigned long long wait_curr_counter;
 };
 
 DEFINE_PER_CPU(struct cave_time, time_stats);
@@ -135,6 +137,7 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 	__RUNNING_AVG_STAT(d, s, n, locked_dec);	\
 	__RUNNING_AVG_STAT(d, s, n, inc);		\
 	__RUNNING_AVG_STAT(d, s, n, dec);		\
+	__RUNNING_AVG_STAT(d, s, n, skip_inc_wait);	\
 	__RUNNING_AVG_STAT(d, s, n, skip_fast);		\
 	__RUNNING_AVG_STAT(d, s, n, skip_slow);		\
 	__RUNNING_AVG_STAT(d, s, n, skip_replay);	\
@@ -267,8 +270,20 @@ static long read_voltage_msr(void)
 
 static void wait_curr_voltage(long new_voltage)
 {
+#ifdef CAVE_TIME_STATS
+	unsigned long long start;
+	struct cave_time *t = this_cpu_ptr(&time_stats);
+
+	start = rdtsc();
+#endif
+
 	while (new_voltage > curr_voltage)
 		cpu_relax();
+
+#ifdef CAVE_TIME_STATS
+	t->wait_curr_time += rdtsc() - start;
+	t->wait_curr_counter++;
+#endif
 }
 
 static void wait_target_voltage(long new_voltage)
@@ -358,6 +373,20 @@ static inline void _cave_switch(cave_data_t new_context)
 	}
 	my_ref = ref++;
 	spin_unlock_irqrestore(&cave_lock, flags);
+
+	/* When more than one increases happen in a row, the smaller increases
+	 * wait for the curr_voltage to match the new_voltage.
+	 *
+	 * This is a light-weight increase which merely waits for the voltage to
+	 * increase.
+	 */
+
+	if (new_voltage >= curr_voltage) {
+		wait_curr_voltage(new_voltage);
+		INC(cave_stat.skip_inc_wait);
+		end_measure(start, SKIP_INC_WAIT);
+		return;
+	}
 
 	/* if another CPU managed to change voltage before the following check,
 	 * we may keep an out-of-date target_voltage value. In any case the other
@@ -524,7 +553,7 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 	int ret = 0;
 
 #define SKIP(x)					\
-	stat[x].skip = stat[x].skip_fast + stat[x].skip_slow + stat[x].skip_replay + stat[x].skip_race
+	stat[x].skip = stat[x].skip_inc_wait + stat[x].skip_fast + stat[x].skip_slow + stat[x].skip_replay + stat[x].skip_race
 
 	SKIP(0);
 	SKIP(1);
@@ -564,6 +593,7 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 		PRINT(inc);
 		PRINT(dec);
 		PRINT(skip);
+		PRINT(skip_inc_wait);
 		PRINT(skip_fast);
 		PRINT(skip_slow);
 		PRINT(skip_replay);
@@ -580,6 +610,7 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 		__FIXED_STAT(d, inc,       __s);	\
 		__FIXED_STAT(d, dec,       __s);	\
 		__FIXED_STAT(d, skip,      __s);	\
+		__FIXED_STAT(d, skip_inc_wait, __s);	\
 		__FIXED_STAT(d, skip_fast, __s);	\
 		__FIXED_STAT(d, skip_slow, __s);	\
 		__FIXED_STAT(d, skip_replay, __s);	\
@@ -602,6 +633,7 @@ static int _print_cave_stats(char *buf, struct cave_stat *stat, const bool raw)
 		PRINT(inc);
 		PRINT(dec);
 		PRINT(skip);
+		PRINT(skip_inc_wait);
 		PRINT(skip_fast);
 		PRINT(skip_slow);
 		PRINT(skip_replay);
@@ -973,6 +1005,8 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 		}
 		t.wait_target_time += c.wait_target_time;
 		t.wait_target_counter += c.wait_target_counter;
+		t.wait_curr_time += c.wait_curr_time;
+		t.wait_curr_counter += c.wait_curr_counter;
 	}
 
 #define F(x, t) 100 * ((x) << FSHIFT) / (t)
@@ -996,6 +1030,11 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 		ret += sprintf(buf + ret, "wait_target/inc%% " FMT "\n", S(t.wait_target_time, t.time[CAVE_INC]));
 	}
 
+	if (t.wait_curr_counter != 0) {
+		ret += sprintf(buf + ret, "wait_curr/cycles %llu\n", t.wait_curr_time / t.wait_curr_counter);
+		ret += sprintf(buf + ret, "wait_curr/total%% " FMT "\n", S(t.wait_curr_time, time));
+		ret += sprintf(buf + ret, "wait_curr/inc_wait%% " FMT "\n", S(t.wait_curr_time, t.time[SKIP_INC_WAIT]));
+	}
 
 #undef FMT
 #undef S
