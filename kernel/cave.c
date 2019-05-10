@@ -1032,10 +1032,12 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 #define S(x, t)	STAT_INT(F(x, t)), STAT_FRAC(F(x, t))
 #define FMT	"%2llu.%02llu"
 
+	ret += sprintf(buf + ret, "name cycles %% %%\n");
+
 	if (time == 0 || counter == 0)
 		return ret;
 
-	ret += sprintf(buf + ret, "avg/total_cycles %llu\n", time / counter);
+	ret += sprintf(buf + ret, "total %llu\n", time / counter);
 
 	for (j = 0; j < CAVE_CASES; j++) {
 		ret += sprintf(buf + ret, "%s %llu " FMT "\n", cave_stat_name[j],
@@ -1044,15 +1046,17 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	}
 
 	if (t.wait_target_counter != 0) {
-		ret += sprintf(buf + ret, "wait_target/cycles %llu\n", t.wait_target_time / t.wait_target_counter);
-		ret += sprintf(buf + ret, "wait_target/total%% " FMT "\n", S(t.wait_target_time, time));
-		ret += sprintf(buf + ret, "wait_target/inc%% " FMT "\n", S(t.wait_target_time, t.time[CAVE_INC]));
+		ret += sprintf(buf + ret, "wait_target/{inc,total} %llu " FMT " " FMT "\n",
+			       t.wait_target_time / t.wait_target_counter,
+			       S(t.wait_target_time, t.time[CAVE_INC]),
+			       S(t.wait_target_time, time));
 	}
 
 	if (t.wait_curr_counter != 0) {
-		ret += sprintf(buf + ret, "wait_curr/cycles %llu\n", t.wait_curr_time / t.wait_curr_counter);
-		ret += sprintf(buf + ret, "wait_curr/total%% " FMT "\n", S(t.wait_curr_time, time));
-		ret += sprintf(buf + ret, "wait_curr/inc_wait%% " FMT "\n", S(t.wait_curr_time, t.time[SKIP_INC_WAIT]));
+		ret += sprintf(buf + ret, "wait_curr/{inc_wait,total} %llu " FMT " " FMT "\n",
+			       t.wait_curr_time / t.wait_curr_counter,
+			       S(t.wait_curr_time, t.time[SKIP_INC_WAIT]),
+			       S(t.wait_curr_time, time));
 	}
 
 #undef FMT
