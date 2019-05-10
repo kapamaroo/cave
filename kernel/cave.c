@@ -240,6 +240,11 @@ static void write_target_voltage(long new_voltage)
 	target_voltage_cached = new_voltage;
 }
 
+static void write_curr_voltage(long new_voltage)
+{
+	curr_voltage = new_voltage;
+}
+
 static void write_voltage_msr(long new_voltage)
 {
 	u64 new_voffset;
@@ -371,22 +376,25 @@ static inline void _cave_switch(cave_data_t new_context)
 		end_measure(start, CAVE_INC);
 		return;
 	}
-	my_ref = ref++;
-	spin_unlock_irqrestore(&cave_lock, flags);
-
 	/* When more than one increases happen in a row, the smaller increases
 	 * wait for the curr_voltage to match the new_voltage.
 	 *
-	 * This is a light-weight increase which merely waits for the voltage to
-	 * increase.
+	 * This CPU wants to decrease the voltage but still has to wait for the
+	 * increase to take place.
+	 *
+	 * It also considers the case where more than one CPUs try to set the
+	 * same voltage.
 	 */
-
-	if (new_voltage >= curr_voltage) {
+	else if (new_voltage > curr_voltage) {
+		spin_unlock_irqrestore(&cave_lock, flags);
 		wait_curr_voltage(new_voltage);
 		INC(cave_stat.skip_inc_wait);
 		end_measure(start, SKIP_INC_WAIT);
 		return;
 	}
+	else if (new_voltage != target_voltage)
+		my_ref = ref++;
+	spin_unlock_irqrestore(&cave_lock, flags);
 
 	/* if another CPU managed to change voltage before the following check,
 	 * we may keep an out-of-date target_voltage value. In any case the other
@@ -485,6 +493,17 @@ static inline void _cave_switch(cave_data_t new_context)
 	}
 
 	write_target_voltage(selected_voltage);
+	/* the curr_voltage is usefull only in the increase path to protect
+	 * successive increases, set it to the target_voltage on decrease
+	 * for cosistency (curr_voltage is always <= target_voltage)
+	 *
+	 * Note that curr_voltage also changes in wait_target_voltage() which is
+	 * not lock protected. However, when a CPU waits for the voltage to
+	 * increase, it prohibits another CPU from decreasing the voltage. Also
+	 * when a CPU decreases the voltage it holds the lock, therefore it
+	 * prohibits another CPU to increase the voltage.
+	 */
+	write_curr_voltage(selected_voltage);
 	write_voltage_msr(selected_voltage);
 	spin_unlock_irqrestore(&cave_lock, flags);
 	INC(cave_stat.dec);
