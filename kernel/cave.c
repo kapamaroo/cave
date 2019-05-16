@@ -34,16 +34,6 @@ enum cave_case {
 	CAVE_CASES
 };
 
-static char *cave_stat_name[CAVE_CASES] = {
-	"inc",
-	"skip_inc_wait",
-	"skip_fast",
-	"skip_slow",
-	"skip_replay",
-	"skip_race",
-	"dec"
-};
-
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 struct cave_stats {
 	unsigned long long time[CAVE_CASES];
@@ -59,18 +49,30 @@ struct cave_stats {
 	unsigned long long total;
 };
 
-DEFINE_PER_CPU(struct cave_stats, time_stats);
-#endif
+static char *cave_stat_name[CAVE_CASES] = {
+	"inc",
+	"skip_inc_wait",
+	"skip_fast",
+	"skip_slow",
+	"skip_replay",
+	"skip_race",
+	"dec"
+};
 
-static inline void end_measure(unsigned long long start, enum cave_case c)
+DEFINE_PER_CPU(struct cave_stats, time_stats);
+
+static inline void _end_measure(unsigned long long start, enum cave_case c)
 {
-#ifdef CONFIG_UNISERVER_CAVE_STATS
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
 
 	t->time[c] += rdtsc() - start;
 	t->counter[c]++;
-#endif
 }
+
+#define end_measure(start, c)	_end_measure(start, c)
+#else
+#define end_measure(start, c)
+#endif
 
 static volatile int cave_enabled = 0;
 static DEFINE_SPINLOCK(cave_lock);
@@ -348,7 +350,6 @@ static inline void _cave_switch(cave_data_t new_context)
 	long selected_voltage;
 	unsigned long long my_ref;
 	static unsigned long long ref = 0;
-	struct cave_stats *stat = this_cpu_ptr(&time_stats);
 
 #if 1
 	bool done_inc = false;
@@ -356,11 +357,10 @@ static inline void _cave_switch(cave_data_t new_context)
 #endif
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
+	struct cave_stats *stat = this_cpu_ptr(&time_stats);
 	unsigned long long start;
 
 	start = rdtsc();
-#else
-#define start	0
 #endif
 
 	if (!cave_enabled)
@@ -519,9 +519,6 @@ static inline void _cave_switch(cave_data_t new_context)
 	spin_unlock_irqrestore(&cave_lock, flags);
 	end_measure(start, CAVE_DEC);
 
-#ifdef CONFIG_UNISERVER_CAVE_STATS
-#undef start
-#endif
 }
 
 __visible void cave_entry_switch(void)
