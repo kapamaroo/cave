@@ -750,6 +750,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 		spin_lock_irqsave(&cave_lock, flags);
 		if (!cave_enabled) {
 			write_target_voltage(CAVE_NOMINAL_VOLTAGE);
+			write_curr_voltage(CAVE_NOMINAL_VOLTAGE);
 			write_voltage_msr(CAVE_NOMINAL_VOLTAGE);
 			stats_init();
 			cave_enabled = 1;
@@ -765,6 +766,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 			cave_enabled = 0;
 			stats_clear();
 			write_target_voltage(CAVE_NOMINAL_VOLTAGE);
+			write_curr_voltage(CAVE_NOMINAL_VOLTAGE);
 			write_voltage_msr(CAVE_NOMINAL_VOLTAGE);
 			show_msg = true;
 		}
@@ -1117,6 +1119,7 @@ int cave_init(void)
 
 	voltage = read_voltage_msr();
 	write_target_voltage(CAVE_NOMINAL_VOLTAGE);
+	write_curr_voltage(CAVE_NOMINAL_VOLTAGE);
 	write_voltage_msr(CAVE_NOMINAL_VOLTAGE);
 	spin_unlock_irqrestore(&cave_lock, flags);
 
