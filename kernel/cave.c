@@ -392,6 +392,16 @@ static inline void _cave_switch(cave_data_t new_context)
 		end_measure(start, CAVE_INC);
 		return;
 	}
+
+	if (new_voltage == target_voltage) {
+		spin_unlock_irqrestore(&cave_lock, flags);
+		wait_curr_voltage(new_voltage);
+		end_measure(start, SKIP_FAST);
+		return;
+	}
+
+	my_ref = ref++;
+
 	/* When more than one increases happen in a row, the smaller increases
 	 * wait for the curr_voltage to match the new_voltage.
 	 *
@@ -401,14 +411,10 @@ static inline void _cave_switch(cave_data_t new_context)
 	 * It also considers the case where more than one CPUs try to set the
 	 * same voltage.
 	 */
-	else if (new_voltage > curr_voltage) {
+	if (new_voltage > curr_voltage) {
 		spin_unlock_irqrestore(&cave_lock, flags);
 		wait_curr_voltage(new_voltage);
-		end_measure(start, SKIP_INC_WAIT);
-		return;
 	}
-	else if (new_voltage != target_voltage)
-		my_ref = ref++;
 	spin_unlock_irqrestore(&cave_lock, flags);
 
 	/* if another CPU managed to change voltage before the following check,
@@ -427,10 +433,6 @@ static inline void _cave_switch(cave_data_t new_context)
 	 * 	voltage is >= to our new_voltage, we can simply skip any voltage
 	 * 	changes.
 	 */
-	if (new_voltage == target_voltage) {
-		end_measure(start, SKIP_FAST);
-		return;
-	}
 
 	/*
 	 * new_voltage < target_voltage
@@ -1052,7 +1054,7 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	if (t.wait_curr_counter != 0) {
 		ret += sprintf(buf + ret, "wait_curr/{inc_wait,total} %llu " FMT " " FMT "\n",
 			       t.wait_curr_time / t.wait_curr_counter,
-			       S(t.wait_curr_time, t.time[SKIP_INC_WAIT]),
+			       S(t.wait_curr_time, time - t.time[CAVE_INC]),
 			       S(t.wait_curr_time, time));
 	}
 
