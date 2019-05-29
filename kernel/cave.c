@@ -417,8 +417,7 @@ static inline void _cave_switch(cave_data_t new_context)
 	}
 	spin_unlock_irqrestore(&cave_lock, flags);
 
-	/* if another CPU managed to change voltage before the following check,
-	 * we may keep an out-of-date target_voltage value. In any case the other
+	/* We may keep an out-of-date target_voltage value. In any case the other
 	 * CPU has observed / considered our new_voltage during its decision.
 	 * The out-of-date target_voltage is covered in all of the following
 	 * possible cases:
@@ -432,10 +431,6 @@ static inline void _cave_switch(cave_data_t new_context)
 	 * 	value and went through the lockless selection. The decreased
 	 * 	voltage is >= to our new_voltage, we can simply skip any voltage
 	 * 	changes.
-	 */
-
-	/*
-	 * new_voltage < target_voltage
 	 *
 	 * We may observe newer contexts from other CPUs that may lead to
 	 * increase of voltage instead of decrease. Other CPUs that may try to
