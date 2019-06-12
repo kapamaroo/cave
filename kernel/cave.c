@@ -93,6 +93,8 @@ static struct cave_stats avg;
 static struct cave_stats cave_stat_avg[4];
 static int stat_samples[3] = { 0, 0, 0 };
 
+static bool skip_voltage_msr __read_mostly = false;
+
 #define FSHIFT	11
 #define FIXED_1	(1 << FSHIFT)
 #define STAT_INT(x)	((x) >> FSHIFT)
@@ -267,6 +269,9 @@ static void write_voltage_msr(long new_voltage)
 {
 	u64 new_voffset;
 
+	if (unlikely(skip_voltage_msr))
+		return;
+
 	new_voffset = VOFFSET_OF(new_voltage);
 	write_voffset_msr(new_voffset);
 
@@ -284,6 +289,9 @@ static long read_target_voltage(void)
 static long read_voltage_msr(void)
 {
 	long voffset_msr, voltage_msr;
+
+	if (unlikely(skip_voltage_msr))
+		return target_voltage_cached;
 
 	voffset_msr = read_voffset_msr();
 	voltage_msr = VOLTAGE_OF(voffset_msr);
@@ -1055,6 +1063,8 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	int ret = 0;
 
+	ret += sprintf(buf + ret, "skip_voltage_msr = %s\n", skip_voltage_msr ? "true" : "false");
+
 	return ret;
 }
 
@@ -1062,6 +1072,14 @@ static
 ssize_t debug_store(struct kobject *kobj, struct kobj_attribute *attr,
 		    const char *buf, size_t count)
 {
+	int val = 0;
+
+	sscanf(buf, "skip_voltage_msr = %d", &val);
+	if ((val == 1 || val == 0) && skip_voltage_msr != val) {
+		skip_voltage_msr = val;
+		printk(KERN_WARNING "cave: skip_voltage_msr = %s\n", val ? "true" : "false");
+	}
+
 	return count;
 }
 
