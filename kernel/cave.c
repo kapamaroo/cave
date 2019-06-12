@@ -574,6 +574,12 @@ void cave_set_init_task(void)
 static int _print_cave_stats(char *buf, struct cave_stats *stat, const bool raw)
 {
 	int ret = 0;
+	int j;
+
+	unsigned long long time = 0;
+	unsigned long long counter = 0;
+
+	struct cave_stats t = avg;
 
 #define SKIP(x)						\
 	stat[x].skip =					\
@@ -677,6 +683,46 @@ static int _print_cave_stats(char *buf, struct cave_stats *stat, const bool raw)
 #undef __FIXED_STAT
 #undef FIXED_STAT
 	}
+
+#define F(x, t) 100 * ((x) << FSHIFT) / (t)
+#define S(x, t)	STAT_INT(F(x, t)), STAT_FRAC(F(x, t))
+#define FMT	"%2llu.%02llu"
+
+	for (j = 0; j < CAVE_CASES; j++) {
+		time += t.time[j];
+		counter += t.counter[j];
+	}
+
+	ret += sprintf(buf + ret, "name cycles %% %%\n");
+
+	if (time == 0 || counter == 0)
+		return ret;
+
+	ret += sprintf(buf + ret, "total %llu\n", time / counter);
+
+	for (j = 0; j < CAVE_CASES; j++) {
+		ret += sprintf(buf + ret, "%s %llu " FMT "\n", cave_stat_name[j],
+			       t.time[j] / (t.counter[j] + 1),
+			       S(t.time[j], time));
+	}
+
+	if (t.wait_target_counter != 0) {
+		ret += sprintf(buf + ret, "wait_target/{inc,total} %llu " FMT " " FMT "\n",
+			       t.wait_target_time / t.wait_target_counter,
+			       S(t.wait_target_time, t.time[CAVE_INC]),
+			       S(t.wait_target_time, time));
+	}
+
+	if (t.wait_curr_counter != 0) {
+		ret += sprintf(buf + ret, "wait_curr/{inc_wait,total} %llu " FMT " " FMT "\n",
+			       t.wait_curr_time / t.wait_curr_counter,
+			       S(t.wait_curr_time, time - t.time[CAVE_INC]),
+			       S(t.wait_curr_time, time));
+	}
+
+#undef FMT
+#undef S
+#undef F
 
 	return ret;
 }
@@ -1008,55 +1054,6 @@ static
 ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	int ret = 0;
-
-#ifdef CONFIG_UNISERVER_CAVE_STATS
-	int j;
-
-	unsigned long long time = 0;
-	unsigned long long counter = 0;
-
-	struct cave_stats t = avg;
-
-#define F(x, t) 100 * ((x) << FSHIFT) / (t)
-#define S(x, t)	STAT_INT(F(x, t)), STAT_FRAC(F(x, t))
-#define FMT	"%2llu.%02llu"
-
-	for (j = 0; j < CAVE_CASES; j++) {
-		time += t.time[j];
-		counter += t.counter[j];
-	}
-
-	ret += sprintf(buf + ret, "name cycles %% %%\n");
-
-	if (time == 0 || counter == 0)
-		return ret;
-
-	ret += sprintf(buf + ret, "total %llu\n", time / counter);
-
-	for (j = 0; j < CAVE_CASES; j++) {
-		ret += sprintf(buf + ret, "%s %llu " FMT "\n", cave_stat_name[j],
-			       t.time[j] / (t.counter[j] + 1),
-			       S(t.time[j], time));
-	}
-
-	if (t.wait_target_counter != 0) {
-		ret += sprintf(buf + ret, "wait_target/{inc,total} %llu " FMT " " FMT "\n",
-			       t.wait_target_time / t.wait_target_counter,
-			       S(t.wait_target_time, t.time[CAVE_INC]),
-			       S(t.wait_target_time, time));
-	}
-
-	if (t.wait_curr_counter != 0) {
-		ret += sprintf(buf + ret, "wait_curr/{inc_wait,total} %llu " FMT " " FMT "\n",
-			       t.wait_curr_time / t.wait_curr_counter,
-			       S(t.wait_curr_time, time - t.time[CAVE_INC]),
-			       S(t.wait_curr_time, time));
-	}
-
-#undef FMT
-#undef S
-#undef F
-#endif
 
 	return ret;
 }
