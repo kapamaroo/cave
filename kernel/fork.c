@@ -87,7 +87,7 @@
 #include <linux/compiler.h>
 #include <linux/sysctl.h>
 #include <linux/kcov.h>
-#include <linux/cave.h>
+#include <linux/cave_api.h>
 
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>

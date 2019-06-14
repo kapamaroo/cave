@@ -11,18 +11,6 @@
 #include <linux/hrtimer.h>
 #include <linux/syscalls.h>
 
-#define CAVE_KERNEL_CONTEXT (cave_data_t){ .voltage = VOLTAGE_OF(cave_kernel_voffset) }
-#define CAVE_NOMINAL_CONTEXT	(cave_data_t){ .voltage = CAVE_NOMINAL_VOLTAGE }
-#ifdef CONFIG_UNISERVER_CAVE_USERSPACE
-#define CAVE_USERSPACE_CONTEXT	(cave_data_t){ .voltage = VOLTAGE_OF(cave_userspace_voffset) }
-#endif
-
-#define TO_VOFFSET_DATA(__val)	(__val ? (0x800ULL - (u64)__val) << 21 : 0ULL)
-#define TO_VOFFSET_VAL(__data)    (__data ? (0x800ULL - ((u64)__data >> 21)) : 0ULL)
-
-#define CORE_VOFFSET_VAL(__val)		(0x8000001100000000ULL | TO_VOFFSET_DATA(__val))
-#define CACHE_VOFFSET_VAL(__val)	(0x8000021100000000ULL | TO_VOFFSET_DATA(__val))
-
 enum cave_case {
 	CAVE_INC = 0,
 	SKIP_INC_WAIT,
@@ -75,15 +63,23 @@ static inline void _end_measure(unsigned long long start, enum cave_case c)
 #endif
 
 static volatile int cave_enabled = 0;
-static DEFINE_SPINLOCK(cave_lock);
-DEFINE_PER_CPU(cave_data_t, context) = CAVE_NOMINAL_CONTEXT;
 static volatile int cave_random_vmin_enabled __read_mostly = 0;
+
+static DEFINE_SPINLOCK(cave_lock);
+
 static volatile int cave_kernel_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
+static volatile int cave_max_voffset __read_mostly = 400;
+#define CAVE_KERNEL_CONTEXT (cave_data_t){ .voltage = VOLTAGE_OF(cave_kernel_voffset) }
+#define CAVE_NOMINAL_CONTEXT	(cave_data_t){ .voltage = CAVE_NOMINAL_VOLTAGE }
+
 #ifdef CONFIG_UNISERVER_CAVE_USERSPACE
 #define CAVE_DEFAULT_USERSPACE_VOFFSET	CONFIG_UNISERVER_CAVE_DEFAULT_USERSPACE_VOFFSET
 static volatile int cave_userspace_voffset __read_mostly = CAVE_DEFAULT_USERSPACE_VOFFSET;
+#define CAVE_USERSPACE_CONTEXT	(cave_data_t){ .voltage = VOLTAGE_OF(cave_userspace_voffset) }
 #endif
-static volatile int cave_max_voffset __read_mostly = 400;
+
+DEFINE_PER_CPU(cave_data_t, context) = CAVE_NOMINAL_CONTEXT;
+
 static volatile long target_voltage_cached = CAVE_NOMINAL_VOLTAGE;
 static volatile long curr_voltage = CAVE_NOMINAL_VOLTAGE;
 
@@ -239,6 +235,14 @@ static void cave_check_tasks(void)
 }
 #endif
 
+/* Arch specific */
+
+#define TO_VOFFSET_DATA(__val)	(__val ? (0x800ULL - (u64)__val) << 21 : 0ULL)
+#define TO_VOFFSET_VAL(__data)    (__data ? (0x800ULL - ((u64)__data >> 21)) : 0ULL)
+
+#define CORE_VOFFSET_VAL(__val)		(0x8000001100000000ULL | TO_VOFFSET_DATA(__val))
+#define CACHE_VOFFSET_VAL(__val)	(0x8000021100000000ULL | TO_VOFFSET_DATA(__val))
+
 static inline void write_voffset_msr(u64 voffset)
 {
 	wrmsrl(0x150, CORE_VOFFSET_VAL(voffset));
@@ -254,6 +258,8 @@ static inline u64 read_voffset_msr(void)
 
 	return TO_VOFFSET_VAL(voffset);
 }
+
+/* ************************************************************************** */
 
 static void write_target_voltage(long new_voltage)
 {
