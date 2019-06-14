@@ -67,6 +67,8 @@ static inline void _end_measure(unsigned long long start, enum cave_case c)
 static volatile int cave_enabled = 0;
 static volatile int cave_random_vmin_enabled __read_mostly = 0;
 
+static unsigned long long ref = 0;
+
 static DEFINE_SPINLOCK(cave_lock);
 
 static volatile int cave_kernel_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
@@ -347,7 +349,6 @@ static inline void _cave_switch(cave_data_t new_context)
 	long updated_voffset;
 	long selected_voffset;
 	unsigned long long my_ref;
-	static unsigned long long ref = 0;
 
 #if 1
 	bool done_inc = false;
@@ -361,6 +362,10 @@ static inline void _cave_switch(cave_data_t new_context)
 	start = rdtsc();
 #endif
 
+	/* Fast path: check cave_enable outside of the cave_lock.
+	 * It also covers the increase path if the system is subject to
+	 * undervolting only.
+	 */
 	if (!cave_enabled)
 		return;
 
@@ -377,6 +382,19 @@ static inline void _cave_switch(cave_data_t new_context)
 
 	this_cpu_write(context, new_context);
 	target_voffset = read_target_voffset();
+
+	/* We may try to increase voltage just after cave is disabled,
+	 * see cave_enabled comment above.
+	 * It is safe to enter the increase path as soon as we undervolt only,
+	 * if cave is disabled then target_voffset is nominal (lowest possible)
+	 * and we skip the increase path.
+	 */
+
+	/* It is cleaner to just check cave_enabled in the cave_lock but prefer
+	 * this detection method of cave disable as it has less overhead for the
+	 * common case.
+	 * Same for decrease path.
+	 */
 
 	/* increase voltage immediately */
 	if (new_voffset < target_voffset) {
@@ -480,11 +498,25 @@ static inline void _cave_switch(cave_data_t new_context)
 	 */
 	updated_voffset = read_target_voffset();
 
+	/* In case cave is disable in between,
+	 * updated_voffset = CAVE_NOMINAL_VOFFSET and
+	 * target_voffset != CAVE_NOMINAL_VOFFSET, then
+	 * the following condition is true.
+	 */
+
 	if (updated_voffset != target_voffset) {
 		spin_unlock_irqrestore(&cave_lock, flags);
 		end_measure(start, SKIP_RACE);
 		return;
 	}
+
+	/* In case cave is disabled in between,
+	 * updated_voffset = CAVE_NOMINAL_VOFFSET and
+	 * target_voffset == CAVE_NOMINAL_VOFFSET, then
+	 * the following condition is true (see enable_store()).
+	 * It cascades to case 2 below because selected_voffset is going to be
+	 * equal to CAVE_NOMINAL_VOFFSET and updated_voffset (lowest possible).
+	 */
 
 	if (my_ref != ref) {
 		/* case 2 */
@@ -792,6 +824,16 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 	else {
 		spin_lock_irqsave(&cave_lock, flags);
 		if (cave_enabled) {
+			/* It is possible for some cores to still be in the
+			 * middle of the switch decision (see _cave_switch()).
+			 * Update cave_ref_ticket and the context of this core
+			 * in order to guide these cores to the SKIP_REPLAY case
+			 * and skip decrease of the voltage.
+			 */
+
+			ref++;
+			this_cpu_write(context, CAVE_NOMINAL_CONTEXT);
+
 			cave_enabled = 0;
 			stats_clear();
 			write_voffset(CAVE_NOMINAL_VOFFSET);
