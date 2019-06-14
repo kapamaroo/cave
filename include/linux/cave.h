@@ -5,14 +5,10 @@
 
 #include <linux/cave_data.h>
 
-#define CAVE_NOMINAL_VOLTAGE		4000ULL
 #define CAVE_DEFAULT_KERNEL_VOFFSET	CONFIG_UNISERVER_CAVE_DEFAULT_KERNEL_VOFFSET
 
-#define VOFFSET_OF(__voltage)	((long)CAVE_NOMINAL_VOLTAGE - (long)(__voltage))
-#define VOLTAGE_OF(__voffset)	((long)CAVE_NOMINAL_VOLTAGE - (long)(__voffset))
-
 #define INIT_TASK_CAVE							\
-	.cave_data = { .voltage = VOLTAGE_OF(CAVE_DEFAULT_KERNEL_VOFFSET) },
+	.cave_data = { .voffset = CAVE_DEFAULT_KERNEL_VOFFSET },
 
 #else
 #define INIT_TASK_CAVE

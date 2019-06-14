@@ -967,7 +967,7 @@ static int __ref kernel_init(void *unused)
 
 	rcu_end_inkernel_boot();
 
-	cave_set_init_task();
+	cave_init_userspace();
 
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);

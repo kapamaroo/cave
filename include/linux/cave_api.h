@@ -5,15 +5,15 @@ struct task_struct;
 
 #ifdef CONFIG_UNISERVER_CAVE
 
-void cave_set_task(struct task_struct *p, struct task_struct *parent);
-void cave_set_init_task(void);
+void cave_copy_task(struct task_struct *p, struct task_struct *parent);
+void cave_init_userspace(void);
 
 #else
-static void cave_set_task(task_struct *p, struct task_struct *parent)
+static void cave_copy_task(task_struct *p, struct task_struct *parent)
 {
 }
 
-static void cave_set_init_task(void)
+static void cave_init_userspace(void)
 {
 }
 

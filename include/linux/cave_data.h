@@ -4,7 +4,7 @@
 #ifdef CONFIG_UNISERVER_CAVE
 
 typedef struct cave_data {
-	long voltage;
+	long voffset;
 } cave_data_t;
 
 #endif
