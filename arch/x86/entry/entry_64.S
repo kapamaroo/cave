@@ -111,6 +111,7 @@ ENDPROC(native_usergs_sysret64)
 
 .macro ENTRY_HOOK_SYSCALL
 #ifdef CONFIG_UNISERVER_CAVE
+	movq	%rax, %rdi
 	call	cave_entry_switch
         RESTORE_C_REGS_EXCEPT_RAX
 	movq	ORIG_RAX(%rsp), %rax

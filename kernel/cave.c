@@ -9,7 +9,9 @@
 #include <linux/random.h>
 #include <linux/cave.h>
 #include <linux/hrtimer.h>
+#include <linux/slab.h>
 #include <linux/syscalls.h>
+#include <generated/asm-offsets.h>
 
 #define CAVE_NOMINAL_VOFFSET	0
 
@@ -64,6 +66,9 @@ static inline void _end_measure(unsigned long long start, enum cave_case c)
 #define end_measure(start, c)
 #endif
 
+static struct kobject *cave_kobj;
+static struct kobject *syscall_enabled_kobj;
+
 static volatile int cave_enabled = 0;
 static volatile int cave_random_vmin_enabled __read_mostly = 0;
 
@@ -108,6 +113,8 @@ DEFINE_PER_CPU(cave_data_t, context) = CAVE_NOMINAL_CONTEXT;
 
 static volatile long target_voffset_cached = CAVE_NOMINAL_VOFFSET;
 static volatile long curr_voffset = CAVE_NOMINAL_VOFFSET;
+
+DECLARE_BITMAP(syscall_enabled, __NR_syscall_max);
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 static DEFINE_SPINLOCK(cave_stat_avg_lock);
@@ -489,7 +496,7 @@ static inline void _cave_switch(cave_data_t new_context)
 
 }
 
-__visible void cave_entry_switch(void)
+__visible void cave_entry_switch(unsigned long syscall_nr)
 {
 	_cave_switch(CAVE_KERNEL_CONTEXT);
 }
@@ -760,6 +767,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 			// this_cpu_write(context, CAVE_NOMINAL_CONTEXT);
 			write_voffset(CAVE_NOMINAL_VOFFSET);
 			stats_init();
+			bitmap_fill(syscall_enabled, __NR_syscall_max);
 			cave_enabled = 1;
 			show_msg = true;
 		}
@@ -771,6 +779,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 		cave_lock(flags);
 		if (cave_enabled) {
 			cave_enabled = 0;
+			bitmap_zero(syscall_enabled, __NR_syscall_max);
 			stats_clear();
 			/* in case we race with a CPU on the decrease path,
 			 * set context to nominal to avoid decrease in voltage
@@ -1042,6 +1051,71 @@ ssize_t debug_store(struct kobject *kobj, struct kobj_attribute *attr,
 	return count;
 }
 
+static
+ssize_t ctl_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	char *s;
+	int ret;
+
+	s = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if (!s)
+		return 0;
+	bitmap_print_to_pagebuf(false, s, syscall_enabled, __NR_syscall_max);
+	ret = sprintf(buf,"cave: syscall bitmap: %s\n", s);
+	kfree(s);
+
+	return ret;
+}
+
+static
+ssize_t ctl_store(struct kobject *kobj, struct kobj_attribute *attr,
+		  const char *buf, size_t count)
+{
+	int ret = 0;
+	DECLARE_BITMAP(tmp, __NR_syscall_max);
+
+	if (strncmp(buf, "syscall:enable:", 15) == 0) {
+		if (strncmp(buf + 15, "all", 3) == 0 && buf[18] == '\n') {
+			bitmap_fill(syscall_enabled, __NR_syscall_max);
+			return count;
+		}
+
+		if (buf[15] == '\n') {
+			pr_warn("cave: ctl: invalid bitmap parselist\n");
+			return count;
+		}
+
+		ret = bitmap_parselist(buf + 15, tmp, __NR_syscall_max);
+		if (ret == 0) {
+			bitmap_or(syscall_enabled,
+				  syscall_enabled, tmp, __NR_syscall_max);
+			return count;
+		}
+	}
+	else if (strncmp(buf, "syscall:disable:", 16) == 0) {
+		if (strncmp(buf + 16, "all", 3) == 0 && buf[19] == '\n') {
+			bitmap_zero(syscall_enabled, __NR_syscall_max);
+			return count;
+		}
+
+		if (buf[16] == '\n') {
+			pr_warn("cave: ctl: invalid bitmap parselist\n");
+			return count;
+		}
+
+		ret = bitmap_parselist(buf + 16, tmp, __NR_syscall_max);
+		if (ret == 0) {
+			bitmap_andnot(syscall_enabled,
+				      syscall_enabled, tmp, __NR_syscall_max);
+			return count;
+		}
+	}
+
+	pr_warn("cave: ctl: invalid bitmap parselist\n");
+
+	return count;
+}
+
 KERNEL_ATTR_RW(enable);
 KERNEL_ATTR_RO(stats);
 KERNEL_ATTR_RO(raw_stats);
@@ -1054,9 +1128,60 @@ KERNEL_ATTR_RW(kernel_voffset);
 KERNEL_ATTR_RW(userspace_voffset);
 #endif
 KERNEL_ATTR_RW(debug);
+KERNEL_ATTR_RW(ctl);
+
+#define HELPERS(__nr, __sys)						\
+	static								\
+	ssize_t __sys##_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf) \
+	{								\
+		int ret = 0;						\
+									\
+		ret = sprintf(buf, "%d\n",				\
+			      test_bit(__nr, syscall_enabled) ? 1 : 0);	\
+									\
+		return ret;						\
+	}								\
+									\
+	static								\
+	ssize_t __sys##_store(struct kobject *kobj, struct kobj_attribute *attr, \
+			  const char *buf, size_t count)		\
+	{								\
+		int err;						\
+		int enable;						\
+									\
+		err = kstrtouint(buf, 10, &enable);			\
+		if (err || (enable != 0 && enable != 1)) {		\
+			pr_warn("cave: syscall:enable:%s invalid %s value\n", #__sys, attr->attr.name); \
+			return count;					\
+		}							\
+									\
+									\
+		if (enable)						\
+			set_bit(__nr, syscall_enabled);			\
+		else							\
+			clear_bit(__nr, syscall_enabled);		\
+		return count;						\
+	}								\
+
+#define __SYSCALL_64(__nr, __sys, __qual)	\
+	HELPERS(__nr, __sys)			\
+	KERNEL_ATTR_RW(__sys);			\
+
+#include <generated/asm/syscalls_64.h>
+
+#undef HELPERS
+#undef __SYSCALL_64
+
+static struct attribute_group syscall_enabled_attr_group = {
+	.attrs = (struct attribute * []) {
+#define __SYSCALL_64(__nr, __sys, __qual)	&__sys##_attr.attr,
+#include <generated/asm/syscalls_64.h>
+#undef __SYSCALL_64
+		NULL
+	}
+};
 
 static struct attribute_group attr_group = {
-	.name = "cave",
 	.attrs = (struct attribute * []) {
 		&enable_attr.attr,
 		&reset_stats_attr.attr,
@@ -1070,6 +1195,7 @@ static struct attribute_group attr_group = {
 		&userspace_voffset_attr.attr,
 #endif
 		&debug_attr.attr,
+		&ctl_attr.attr,
 		NULL
 	}
 };
@@ -1080,7 +1206,25 @@ int cave_init(void)
 	int err;
 	long voffset;
 
-	err = sysfs_create_group(kernel_kobj, &attr_group);
+	cave_kobj = kobject_create_and_add("cave", kernel_kobj);
+	if (!cave_kobj) {
+		pr_err("cave: failed\n");
+		return -ENOMEM;
+	}
+
+	syscall_enabled_kobj = kobject_create_and_add("syscall_enabled", cave_kobj);
+	if (!syscall_enabled_kobj) {
+		pr_err("cave: failed\n");
+		return -ENOMEM;
+	}
+
+	err = sysfs_create_group(cave_kobj, &attr_group);
+	if (err) {
+		pr_err("cave: failed\n");
+		return err;
+	}
+
+	err = sysfs_create_group(syscall_enabled_kobj, &syscall_enabled_attr_group);
 	if (err) {
 		pr_err("cave: failed\n");
 		return err;
