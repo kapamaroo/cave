@@ -348,8 +348,7 @@ static inline void _cave_switch(cave_data_t new_context)
 	long target_voltage;
 	long updated_voltage;
 	long selected_voltage;
-	unsigned long long my_ref;
-	static unsigned long long ref = 0;
+	static int decrease_path_contention = 0;
 
 #if 1
 	bool done_inc = false;
@@ -400,7 +399,9 @@ static inline void _cave_switch(cave_data_t new_context)
 		return;
 	}
 
-	my_ref = ref++;
+	decrease_path_contention++;
+
+	spin_unlock_irqrestore(&cave_lock, flags);
 
 	/* When more than one increases happen in a row, the smaller increases
 	 * wait for the curr_voltage to match the new_voltage.
@@ -411,46 +412,9 @@ static inline void _cave_switch(cave_data_t new_context)
 	 * It also considers the case where more than one CPUs try to set the
 	 * same voltage.
 	 */
-	if (new_voltage > curr_voltage) {
-		spin_unlock_irqrestore(&cave_lock, flags);
-		wait_curr_voltage(new_voltage);
-	}
-	spin_unlock_irqrestore(&cave_lock, flags);
+	wait_curr_voltage(new_voltage);
 
-	/* We may keep an out-of-date target_voltage value. In any case the other
-	 * CPU has observed / considered our new_voltage during its decision.
-	 * The out-of-date target_voltage is covered in all of the following
-	 * possible cases:
-	 *
-	 * increased target_voltage:
-	 * 	The other CPU holds the most constrained voltage value, we can
-	 * 	simply skip any voltage change.
-	 *
-	 * decreased target_voltage:
-	 * 	The other CPU has released the last most constrained voltage
-	 * 	value and went through the lockless selection. The decreased
-	 * 	voltage is >= to our new_voltage, we can simply skip any voltage
-	 * 	changes.
-	 *
-	 * We may observe newer contexts from other CPUs that may lead to
-	 * increase of voltage instead of decrease. Other CPUs that may try to
-	 * change voltage are going to decide upon the newer voltage values.
-	 */
-	selected_voltage = select_voltage();
-
-	/* The constrained voltage resides on another CPU and remains the same.
-	 * In the case we observe a selection greater than the current voltage,
-	 * another CPU has set the voltage constraint higher.
-	 *
-	 * skip voltage decrease, the other CPU increases the voltage.
-	 */
-
-	if (selected_voltage >= target_voltage) {
-		end_measure(start, SKIP_SLOW);
-		return;
-	}
-
-	/* selected_voltage < target_voltage */
+	/* new_voltage < target_voltage */
 
 #if 0
 	spin_lock_irqsave(&cave_lock, flags);
@@ -463,41 +427,28 @@ static inline void _cave_switch(cave_data_t new_context)
 	}
 #endif
 
-	/* We want to decrease voltage (this CPU was the most constrained).
-	 *
-	 * updated_voltage > target_voltage
-	 * 	another CPU has the highest voltage constraint and increased it.
-	 * 	skip decrease
-	 *
-	 * updated_voltage < target_voltage
-	 * 	another CPU has decreased the voltage considering our constraint
-	 * 	on the decision.
-	 * 	skip decrease
-	 *
-	 * updated_voltage == target_voltage
-	 * 	1. None of the other CPUs crossed an entry / exit point.
-	 * 	   selected_voltage is valid
-	 * 	2. Some other CPUs have skipped decreasing the voltage or
-	 * 	   increased it. This means that another CPU is the most
-	 * 	   constrained now with >= voltage value.
-	 * 	   selected_voltage is out-of-date
-	 */
-	updated_voltage = read_target_voltage();
+	decrease_path_contention--;
 
-	if (updated_voltage != target_voltage) {
+	/* Skip cascade decreases of voltage from many CPUs */
+	if (decrease_path_contention) {
 		spin_unlock_irqrestore(&cave_lock, flags);
-		end_measure(start, SKIP_RACE);
+		end_measure(start, SKIP_REPLAY);
 		return;
 	}
 
-	if (my_ref != ref) {
-		/* case 2 */
-		selected_voltage = select_voltage();
-		if (selected_voltage >= updated_voltage) {
-			spin_unlock_irqrestore(&cave_lock, flags);
-			end_measure(start, SKIP_REPLAY);
-			return;
-		}
+	selected_voltage = select_voltage();
+	updated_voltage = read_target_voltage();
+
+	if (selected_voltage == updated_voltage) {
+		spin_unlock_irqrestore(&cave_lock, flags);
+		end_measure(start, SKIP_SLOW);
+		return;
+	}
+
+	if (selected_voltage > updated_voltage) {
+		spin_unlock_irqrestore(&cave_lock, flags);
+		end_measure(start, SKIP_RACE);
+		return;
 	}
 
 	write_target_voltage(selected_voltage);
