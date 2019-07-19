@@ -67,9 +67,29 @@ static inline void _end_measure(unsigned long long start, enum cave_case c)
 static volatile int cave_enabled = 0;
 static volatile int cave_random_vmin_enabled __read_mostly = 0;
 
-static unsigned long long ref = 0;
-
 static DEFINE_SPINLOCK(cave_lock);
+
+#define _cave_lock_1(flags)	spin_lock_irqsave(&cave_lock, flags)
+#ifndef CONFIG_UNISERVER_CAVE_STATS
+#define _cave_lock_2(flags, mode)	spin_lock_irqsave(&cave_lock, flags)
+#else
+#define _cave_lock_2(flags, mode)					\
+	do {								\
+		struct cave_stats *stat = this_cpu_ptr(&time_stats);	\
+		bool done = false;					\
+		while (!spin_trylock_irqsave(&cave_lock, flags)) {	\
+			if (!done) {					\
+				done = true;				\
+				stat->locked_##mode++;			\
+			}						\
+		}							\
+	} while (0)
+#endif
+
+#define GET_MACRO(_0, arg1, _1, _2, NAME, ...) NAME
+
+#define cave_lock(...)	GET_MACRO(_0, __VA_ARGS__, arg1, _cave_lock_2, _cave_lock_1)(__VA_ARGS__)
+#define cave_unlock(flags)	spin_unlock_irqrestore(&cave_lock, flags)
 
 static volatile int cave_kernel_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
 static volatile int cave_max_voffset __read_mostly = 400;
@@ -329,7 +349,7 @@ static void wait_target_voffset(long new_voffset)
 
 static long select_voffset(void)
 {
-	long new_voffset = 0;
+	long new_voffset = LONG_MAX;
 	int i;
 
 	for_each_possible_cpu(i) {
@@ -348,15 +368,9 @@ static inline void _cave_switch(cave_data_t new_context)
 	long target_voffset;
 	long updated_voffset;
 	long selected_voffset;
-	unsigned long long my_ref;
-
-#if 1
-	bool done_inc = false;
-	bool done_dec = false;
-#endif
+	static int switch_path_contention = 0;
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
-	struct cave_stats *stat = this_cpu_ptr(&time_stats);
 	unsigned long long start;
 
 	start = rdtsc();
@@ -369,16 +383,12 @@ static inline void _cave_switch(cave_data_t new_context)
 	if (!cave_enabled)
 		return;
 
-#if 0
-	spin_lock_irqsave(&cave_lock, flags);
-#else
-	while (!spin_trylock_irqsave(&cave_lock, flags)) {
-		if (!done_inc) {
-			done_inc = true;
-			stat->locked_inc++;
-		}
+	cave_lock(flags, inc);
+
+	if (!cave_enabled) {
+		cave_unlock(flags);
+		return;
 	}
-#endif
 
 	this_cpu_write(context, new_context);
 	target_voffset = read_target_voffset();
@@ -393,7 +403,6 @@ static inline void _cave_switch(cave_data_t new_context)
 	/* It is cleaner to just check cave_enabled in the cave_lock but prefer
 	 * this detection method of cave disable as it has less overhead for the
 	 * common case.
-	 * Same for decrease path.
 	 */
 
 	/* increase voltage immediately */
@@ -401,7 +410,7 @@ static inline void _cave_switch(cave_data_t new_context)
 		write_target_voffset(new_voffset);
 		write_voffset_msr(new_voffset);
 
-		spin_unlock_irqrestore(&cave_lock, flags);
+		cave_unlock(flags);
 
 		wait_target_voffset(new_voffset);
 
@@ -410,16 +419,18 @@ static inline void _cave_switch(cave_data_t new_context)
 	}
 
 	if (new_voffset == target_voffset) {
-		spin_unlock_irqrestore(&cave_lock, flags);
+		cave_unlock(flags);
 		wait_curr_voffset(new_voffset);
 		end_measure(start, SKIP_FAST);
 		return;
 	}
 
-	my_ref = ref++;
+	switch_path_contention++;
+
+	cave_unlock(flags);
 
 	/* When more than one increases happen in a row, the smaller increases
-	 * wait for the curr_voltage to match the new_voltage.
+	 * wait for the curr_voffset to match the new_voffset.
 	 *
 	 * This CPU wants to decrease the voltage but still has to wait for the
 	 * increase to take place.
@@ -427,119 +438,53 @@ static inline void _cave_switch(cave_data_t new_context)
 	 * It also considers the case where more than one CPUs try to set the
 	 * same voltage.
 	 */
-	if (new_voffset < curr_voffset) {
-		spin_unlock_irqrestore(&cave_lock, flags);
-		wait_curr_voffset(new_voffset);
+	wait_curr_voffset(new_voffset);
+
+	/* new_voffset > target_voffset */
+
+	cave_lock(flags, dec);
+
+	switch_path_contention--;
+
+	if (!cave_enabled) {
+		cave_unlock(flags);
+		return;
 	}
-	spin_unlock_irqrestore(&cave_lock, flags);
 
-	/* We may keep an out-of-date target_voltage value. In any case the other
-	 * CPU has observed / considered our new_voltage during its decision.
-	 * The out-of-date target_voltage is covered in all of the following
-	 * possible cases:
-	 *
-	 * increased target_voltage:
-	 * 	The other CPU holds the most constrained voltage value, we can
-	 * 	simply skip any voltage change.
-	 *
-	 * decreased target_voltage:
-	 * 	The other CPU has released the last most constrained voltage
-	 * 	value and went through the lockless selection. The decreased
-	 * 	voltage is >= to our new_voltage, we can simply skip any voltage
-	 * 	changes.
-	 *
-	 * We may observe newer contexts from other CPUs that may lead to
-	 * increase of voltage instead of decrease. Other CPUs that may try to
-	 * change voltage are going to decide upon the newer voltage values.
-	 */
+	/* Skip cascade decreases of voltage from many CPUs */
+	if (switch_path_contention) {
+		cave_unlock(flags);
+		end_measure(start, SKIP_REPLAY);
+		return;
+	}
+
 	selected_voffset = select_voffset();
+	updated_voffset = read_target_voffset();
 
-	/* The constrained voltage resides on another CPU and remains the same.
-	 * In the case we observe a selection greater than the current voltage,
-	 * another CPU has set the voltage constraint higher.
-	 *
-	 * skip voltage decrease, the other CPU increases the voltage.
-	 */
-
-	if (selected_voffset <= target_voffset) {
+	if (selected_voffset == updated_voffset) {
+		cave_unlock(flags);
 		end_measure(start, SKIP_SLOW);
 		return;
 	}
 
-#if 0
-	spin_lock_irqsave(&cave_lock, flags);
-#else
-	while (!spin_trylock_irqsave(&cave_lock, flags)) {
-		if (!done_dec) {
-			done_dec = true;
-			stat->locked_dec++;
-		}
-	}
-#endif
-
-	/* We want to decrease voltage (this CPU was the most constrained).
-	 *
-	 * updated_voltage > target_voltage
-	 * 	another CPU has the highest voltage constraint and increased it.
-	 * 	skip decrease
-	 *
-	 * updated_voltage < target_voltage
-	 * 	another CPU has decreased the voltage considering our constraint
-	 * 	on the decision.
-	 * 	skip decrease
-	 *
-	 * updated_voltage == target_voltage
-	 * 	1. None of the other CPUs crossed an entry / exit point.
-	 * 	   selected_voltage is valid
-	 * 	2. Some other CPUs have skipped decreasing the voltage or
-	 * 	   increased it. This means that another CPU is the most
-	 * 	   constrained now with >= voltage value.
-	 * 	   selected_voltage is out-of-date
-	 */
-	updated_voffset = read_target_voffset();
-
-	/* In case cave is disable in between,
-	 * updated_voffset = CAVE_NOMINAL_VOFFSET and
-	 * target_voffset != CAVE_NOMINAL_VOFFSET, then
-	 * the following condition is true.
-	 */
-
-	if (updated_voffset != target_voffset) {
-		spin_unlock_irqrestore(&cave_lock, flags);
+	if (selected_voffset < updated_voffset) {
+		cave_unlock(flags);
 		end_measure(start, SKIP_RACE);
 		return;
 	}
 
-	/* In case cave is disabled in between,
-	 * updated_voffset = CAVE_NOMINAL_VOFFSET and
-	 * target_voffset == CAVE_NOMINAL_VOFFSET, then
-	 * the following condition is true (see enable_store()).
-	 * It cascades to case 2 below because selected_voffset is going to be
-	 * equal to CAVE_NOMINAL_VOFFSET and updated_voffset (lowest possible).
-	 */
-
-	if (my_ref != ref) {
-		/* case 2 */
-		selected_voffset = select_voffset();
-		if (selected_voffset <= updated_voffset) {
-			spin_unlock_irqrestore(&cave_lock, flags);
-			end_measure(start, SKIP_REPLAY);
-			return;
-		}
-	}
-
-	/* the curr_voltage is usefull only in the increase path to protect
-	 * successive increases, set it to the target_voltage on decrease
-	 * for cosistency (curr_voltage is always <= target_voltage)
+	/* the curr_voffset is usefull only in the increase path to protect
+	 * successive increases, set it to the target_voffset on decrease
+	 * for cosistency (curr_voffset is always >= target_voffset)
 	 *
-	 * Note that curr_voltage also changes in wait_target_voltage() which is
+	 * Note that curr_voffset also changes in wait_target_voffset() which is
 	 * not lock protected. However, when a CPU waits for the voltage to
 	 * increase, it prohibits another CPU from decreasing the voltage. Also
 	 * when a CPU decreases the voltage it holds the lock, therefore it
 	 * prohibits another CPU to increase the voltage.
 	 */
 	write_voffset(selected_voffset);
-	spin_unlock_irqrestore(&cave_lock, flags);
+	cave_unlock(flags);
 	end_measure(start, CAVE_DEC);
 
 }
@@ -810,36 +755,33 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 	}
 
 	if (enable) {
-		spin_lock_irqsave(&cave_lock, flags);
+		cave_lock(flags);
 		if (!cave_enabled) {
+			// this_cpu_write(context, CAVE_NOMINAL_CONTEXT);
 			write_voffset(CAVE_NOMINAL_VOFFSET);
 			stats_init();
 			cave_enabled = 1;
 			show_msg = true;
 		}
-		spin_unlock_irqrestore(&cave_lock, flags);
+		cave_unlock(flags);
 		if (show_msg)
 			pr_info("cave: enabled\n");
 	}
 	else {
-		spin_lock_irqsave(&cave_lock, flags);
+		cave_lock(flags);
 		if (cave_enabled) {
-			/* It is possible for some cores to still be in the
-			 * middle of the switch decision (see _cave_switch()).
-			 * Update cave_ref_ticket and the context of this core
-			 * in order to guide these cores to the SKIP_REPLAY case
-			 * and skip decrease of the voltage.
-			 */
-
-			ref++;
-			this_cpu_write(context, CAVE_NOMINAL_CONTEXT);
-
 			cave_enabled = 0;
 			stats_clear();
+			/* in case we race with a CPU on the decrease path,
+			 * set context to nominal to avoid decrease in voltage
+			 * below nominal. select_voffset() chooses the most
+			 * constrained voffset (nominal).
+			 */
+			// this_cpu_write(context, CAVE_NOMINAL_CONTEXT);
 			write_voffset(CAVE_NOMINAL_VOFFSET);
 			show_msg = true;
 		}
-		spin_unlock_irqrestore(&cave_lock, flags);
+		cave_unlock(flags);
 		if (show_msg)
 			pr_info("cave: disabled\n");
 	}
@@ -906,7 +848,7 @@ ssize_t max_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 		return count;
 	}
 
-	spin_lock_irqsave(&cave_lock, flags);
+	cave_lock(flags);
 	if (voffset < cave_kernel_voffset)
 		pr_warn("cave: new value of max_voffset greater than kernel voffset\n");
 #ifdef CONFIG_UNISERVER_CAVE_USERSPACE
@@ -915,7 +857,7 @@ ssize_t max_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 #endif
 	else
 		cave_max_voffset = voffset;
-	spin_unlock_irqrestore(&cave_lock, flags);
+	cave_unlock(flags);
 	return count;
 }
 
@@ -950,7 +892,7 @@ ssize_t kernel_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 		return count;
 	}
 
-	spin_lock_irqsave(&cave_lock, flags);
+	cave_lock(flags);
 
 	if (cave_enabled) {
 		pr_warn("cave: must be disabled to change kernel voffset\n");
@@ -966,7 +908,7 @@ ssize_t kernel_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 			p->cave_data = CAVE_KERNEL_CONTEXT;
 	write_unlock_irq(&tasklist_lock);
  out:
-	spin_unlock_irqrestore(&cave_lock, flags);
+	cave_unlock(flags);
 
 	return count;
 }
@@ -1002,7 +944,7 @@ ssize_t userspace_voffset_store(struct kobject *kobj, struct kobj_attribute *att
 		return count;
 	}
 
-	spin_lock_irqsave(&cave_lock, flags);
+	cave_lock(flags);
 
 	if (cave_enabled) {
 		pr_warn("cave: must be disabled to change userspace voffset\n");
@@ -1016,7 +958,7 @@ ssize_t userspace_voffset_store(struct kobject *kobj, struct kobj_attribute *att
 			p->cave_data = CAVE_USERSPACE_CONTEXT;
 	write_unlock_irq(&tasklist_lock);
  out:
-	spin_unlock_irqrestore(&cave_lock, flags);
+	cave_unlock(flags);
 
 	return count;
 }
@@ -1028,12 +970,12 @@ ssize_t reset_stats_store(struct kobject *kobj, struct kobj_attribute *attr,
 {
 	unsigned long flags;
 
-	spin_lock_irqsave(&cave_lock, flags);
+	cave_lock(flags);
 	if (cave_enabled) {
 		stats_clear();
 		stats_init();
 	}
-	spin_unlock_irqrestore(&cave_lock, flags);
+	cave_unlock(flags);
 
 	return count;
 }
@@ -1066,11 +1008,11 @@ ssize_t voltage_show(struct kobject *kobj, struct kobj_attribute *attr, char *bu
 	int ret = 0;
 	long voffset;
 
-	spin_lock_irqsave(&cave_lock, flags);
+	cave_lock(flags);
 	voffset = read_target_voffset();
-	spin_unlock_irqrestore(&cave_lock, flags);
+	cave_unlock(flags);
 
-	ret += sprintf(buf + ret, "voffset %ld\n", voffset);
+	ret += sprintf(buf + ret, "voffset %ld\n", -voffset);
 
 	return ret;
 }
@@ -1144,11 +1086,11 @@ int cave_init(void)
 		return err;
 	}
 
-	spin_lock_irqsave(&cave_lock, flags);
+	cave_lock(flags);
 
 	voffset = read_voffset_msr();
 	write_voffset(CAVE_NOMINAL_VOFFSET);
-	spin_unlock_irqrestore(&cave_lock, flags);
+	cave_unlock(flags);
 
 	pr_info("cave: msr offset: %ld\n", -voffset);
 
