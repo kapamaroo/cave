@@ -96,10 +96,13 @@ static DEFINE_SPINLOCK(cave_lock);
 #define cave_lock(...)	GET_MACRO(_0, __VA_ARGS__, arg1, _cave_lock_2, _cave_lock_1)(__VA_ARGS__)
 #define cave_unlock(flags)	spin_unlock_irqrestore(&cave_lock, flags)
 
-static volatile int cave_kernel_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
 static volatile int cave_max_voffset __read_mostly = 400;
-#define CAVE_KERNEL_CONTEXT (cave_data_t){ .voffset = cave_kernel_voffset }
+static volatile int cave_kernel_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
+static volatile int cave_syscall_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
+
 #define CAVE_NOMINAL_CONTEXT	(cave_data_t){ .voffset = CAVE_NOMINAL_VOFFSET }
+#define CAVE_KERNEL_CONTEXT (cave_data_t){ .voffset = cave_kernel_voffset }
+#define CAVE_SYSCALL_CONTEXT (cave_data_t){ .voffset = cave_syscall_voffset }
 
 #ifdef CONFIG_UNISERVER_CAVE_USERSPACE
 #define CAVE_DEFAULT_USERSPACE_VOFFSET	CONFIG_UNISERVER_CAVE_DEFAULT_USERSPACE_VOFFSET
@@ -496,7 +499,17 @@ static inline void _cave_switch(cave_data_t new_context)
 
 }
 
-__visible void cave_entry_switch(unsigned long syscall_nr)
+__visible void cave_syscall_entry_switch(unsigned long syscall_nr)
+{
+	cave_data_t syscall_entry_context = CAVE_KERNEL_CONTEXT;
+
+	if (test_bit(syscall_nr, syscall_enabled))
+		syscall_entry_context = CAVE_SYSCALL_CONTEXT;
+
+	_cave_switch(syscall_entry_context);
+}
+
+__visible void cave_entry_switch(void)
 {
 	_cave_switch(CAVE_KERNEL_CONTEXT);
 }
@@ -922,6 +935,47 @@ ssize_t kernel_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 	return count;
 }
 
+static
+ssize_t syscall_voffset_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	int ret = 0;
+
+	ret += sprintf(buf, "%d\n", cave_syscall_voffset);
+
+	return ret;
+}
+
+static
+ssize_t syscall_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
+			      const char *buf, size_t count)
+{
+	unsigned long flags;
+	int voffset;
+	int err;
+
+	err = kstrtouint(buf, 10, &voffset);
+	if (err) {
+		pr_warn("cave: invalid %s value\n", attr->attr.name);
+		return count;
+	}
+
+	if (voffset > cave_max_voffset) {
+		pr_warn("cave: %s out of range\n", attr->attr.name);
+		return count;
+	}
+
+	cave_lock(flags);
+
+	if (cave_enabled)
+		pr_warn("cave: must be disabled to change syscall voffset\n");
+	else
+		cave_syscall_voffset = voffset;
+
+	cave_unlock(flags);
+
+	return count;
+}
+
 #ifdef CONFIG_UNISERVER_CAVE_USERSPACE
 static
 ssize_t userspace_voffset_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -1124,6 +1178,7 @@ KERNEL_ATTR_RO(voltage);
 KERNEL_ATTR_RW(random_vmin_enable);
 KERNEL_ATTR_RW(max_voffset);
 KERNEL_ATTR_RW(kernel_voffset);
+KERNEL_ATTR_RW(syscall_voffset);
 #ifdef CONFIG_UNISERVER_CAVE_USERSPACE
 KERNEL_ATTR_RW(userspace_voffset);
 #endif
@@ -1191,6 +1246,7 @@ static struct attribute_group attr_group = {
 		&random_vmin_enable_attr.attr,
 		&max_voffset_attr.attr,
 		&kernel_voffset_attr.attr,
+		&syscall_voffset_attr.attr,
 #ifdef CONFIG_UNISERVER_CAVE_USERSPACE
 		&userspace_voffset_attr.attr,
 #endif
