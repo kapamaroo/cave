@@ -15,50 +15,74 @@
 
 #define CAVE_NOMINAL_VOFFSET	0
 
-enum cave_case {
+enum cave_switch_case {
 	CAVE_INC = 0,
-	SKIP_INC_WAIT,
 	SKIP_FAST,
 	SKIP_SLOW,
 	SKIP_REPLAY,
 	SKIP_RACE,
 	CAVE_DEC,
-	CAVE_CASES
+	CAVE_SWITCH_CASES
 };
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
+
+enum cave_lock_case {
+	LOCK_INC = 0,
+	LOCK_DEC,
+	CAVE_LOCK_CASES
+};
+
 struct cave_stats {
-	unsigned long long time[CAVE_CASES];
-	unsigned long long counter[CAVE_CASES];
+	unsigned long long time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES];
+	unsigned long long counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES];
 	unsigned long long wait_target_time;
 	unsigned long long wait_target_counter;
 	unsigned long long wait_curr_time;
 	unsigned long long wait_curr_counter;
-	unsigned long long locked_inc;
-	unsigned long long locked_dec;
 	unsigned long long locked;
 	unsigned long long skip;
 	unsigned long long total;
 };
 
-static char *cave_stat_name[CAVE_CASES] = {
-	"inc",
-	"skip_inc_wait",
-	"skip_fast",
-	"skip_slow",
-	"skip_replay",
-	"skip_race",
-	"dec"
+static char *cave_stat_name[CAVE_SWITCH_CASES + CAVE_LOCK_CASES] = {
+	__stringify(CAVE_INC),
+	__stringify(SKIP_FAST),
+	__stringify(SKIP_SLOW),
+	__stringify(SKIP_REPLAY),
+	__stringify(SKIP_RACE),
+	__stringify(CAVE_DEC),
+
+	__stringify(LOCK_INC),
+	__stringify(LOCK_DEC)
 };
 
 DEFINE_PER_CPU(struct cave_stats, time_stats);
 
-static inline void _end_measure(unsigned long long start, enum cave_case c)
+static inline void _end_measure(unsigned long long start, enum cave_switch_case c)
 {
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
 
-	t->time[c] += rdtsc() - start;
+	unsigned long long time = rdtsc() - start;
+
+	/* WARN_ON_ONCE(t->time[c] >= ULLONG_MAX - time); */
+
+	t->time[c] += time;
 	t->counter[c]++;
+}
+
+static inline void _end_lock_measure(unsigned long long start, enum cave_lock_case c)
+{
+#if 1
+	struct cave_stats *t = this_cpu_ptr(&time_stats);
+
+	unsigned long long time = rdtsc() - start;
+
+	/* WARN_ON_ONCE(t->time[CAVE_SWITCH_CASES + c] > ULLONG_MAX - time); */
+
+	t->time[CAVE_SWITCH_CASES + c] += time;
+	t->counter[CAVE_SWITCH_CASES + c]++;
+#endif
 }
 
 #define end_measure(start, c)	_end_measure(start, c)
@@ -76,24 +100,34 @@ static DEFINE_SPINLOCK(cave_lock);
 
 #define _cave_lock_1(flags)	spin_lock_irqsave(&cave_lock, flags)
 #ifndef CONFIG_UNISERVER_CAVE_STATS
-#define _cave_lock_2(flags, mode)	spin_lock_irqsave(&cave_lock, flags)
+#define _cave_lock_2(flags, lock_case)	spin_lock_irqsave(&cave_lock, flags)
+#define _cave_lock_3(flags, lock_case, start)	spin_lock_irqsave(&cave_lock, flags)
 #else
-#define _cave_lock_2(flags, mode)					\
+#define _cave_lock_2(flags, lock_case)					\
 	do {								\
-		struct cave_stats *stat = this_cpu_ptr(&time_stats);	\
 		bool done = false;					\
-		while (!spin_trylock_irqsave(&cave_lock, flags)) {	\
-			if (!done) {					\
+		unsigned long long start = rdtsc();			\
+		while (!spin_trylock_irqsave(&cave_lock, flags)) 	\
+			if (!done) 					\
 				done = true;				\
-				stat->locked_##mode++;			\
-			}						\
-		}							\
+		if (done)						\
+			_end_lock_measure(start, lock_case);		\
+	} while (0)
+
+#define _cave_lock_3(flags, lock_case, start)				\
+	do {								\
+		bool done = false;					\
+		while (!spin_trylock_irqsave(&cave_lock, flags)) 	\
+			if (!done) 					\
+				done = true;				\
+		if (done)						\
+			_end_lock_measure(start, lock_case);		\
 	} while (0)
 #endif
 
-#define GET_MACRO(_0, arg1, _1, _2, NAME, ...) NAME
+#define GET_MACRO(_1, _2, _3, NAME, ...) NAME
 
-#define cave_lock(...)	GET_MACRO(_0, __VA_ARGS__, arg1, _cave_lock_2, _cave_lock_1)(__VA_ARGS__)
+#define cave_lock(...)	GET_MACRO(__VA_ARGS__, _cave_lock_3, _cave_lock_2, _cave_lock_1, fn0)(__VA_ARGS__)
 #define cave_unlock(flags)	spin_unlock_irqrestore(&cave_lock, flags)
 
 static volatile int cave_max_voffset __read_mostly = 400;
@@ -121,7 +155,6 @@ DECLARE_BITMAP(syscall_enabled, __NR_syscall_max);
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 static DEFINE_SPINLOCK(cave_stat_avg_lock);
-static struct cave_stats avg;
 static struct cave_stats cave_stat_avg[4];
 static int stat_samples[3] = { 0, 0, 0 };
 
@@ -148,10 +181,15 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 	memset(&t, 0, sizeof(t));
 
 	for_each_possible_cpu(i) {
-		/* local copy */
-		struct cave_stats c = *per_cpu_ptr(&time_stats, i);
+		struct cave_stats c;
 
-		for (j = 0; j < CAVE_CASES; j++) {
+		/* local copy */
+		cave_lock(flags);
+		c = *per_cpu_ptr(&time_stats, i);
+		memset(per_cpu_ptr(&time_stats, i), 0, sizeof(struct cave_stats));
+		cave_unlock(flags);
+
+		for (j = 0; j < CAVE_SWITCH_CASES + CAVE_LOCK_CASES; j++) {
 			t.time[j] += c.time[j];
 			t.counter[j] += c.counter[j];
 		}
@@ -159,41 +197,37 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 		t.wait_target_counter += c.wait_target_counter;
 		t.wait_curr_time += c.wait_curr_time;
 		t.wait_curr_counter += c.wait_curr_counter;
-		t.locked_inc += c.locked_inc;
-		t.locked_dec += c.locked_dec;
-
-		memset(per_cpu_ptr(&time_stats, i), 0, sizeof(struct cave_stats));
 	}
 
 #define __RUNNING_AVG_STAT(d, s, n, x)		\
 	d.x = (d.x * (n) + s.x) / ((n) + 1)
-#define __RUNNING_AVG_STAT2(d, s, n, x)		\
-	d.counter[x] = (d.counter[x] * (n) + s.counter[x]) / ((n) + 1)
-#define RUNNING_AVG_STAT(d, s, n, l)				\
-	if (n == l)						\
-		n--;						\
-								\
-	__RUNNING_AVG_STAT(d, s, n, locked_inc);		\
-	__RUNNING_AVG_STAT(d, s, n, locked_dec);		\
-	__RUNNING_AVG_STAT2(d, s, n, CAVE_INC);			\
-	__RUNNING_AVG_STAT2(d, s, n, CAVE_DEC);			\
-	__RUNNING_AVG_STAT2(d, s, n, SKIP_INC_WAIT);		\
-	__RUNNING_AVG_STAT2(d, s, n, SKIP_FAST);		\
-	__RUNNING_AVG_STAT2(d, s, n, SKIP_SLOW);		\
-	__RUNNING_AVG_STAT2(d, s, n, SKIP_REPLAY);		\
-	__RUNNING_AVG_STAT2(d, s, n, SKIP_RACE);		\
-	n++;
+#define __RUNNING_AVG_STAT2(d, s, n, x)					\
+	do {								\
+		d.counter[x] = (d.counter[x] * (n) + s.counter[x]) / ((n) + 1); \
+		d.time[x] = (d.time[x] * (n) + s.time[x]) / ((n) + 1);	\
+	} while (0)
+
+#define RUNNING_AVG_STAT(d, s, n, l)					\
+	do {								\
+		if (n == l)						\
+			n--;						\
+									\
+		__RUNNING_AVG_STAT2(d, s, n, CAVE_SWITCH_CASES + LOCK_INC); \
+		__RUNNING_AVG_STAT2(d, s, n, CAVE_SWITCH_CASES + LOCK_DEC); \
+		__RUNNING_AVG_STAT2(d, s, n, CAVE_INC);			\
+		__RUNNING_AVG_STAT2(d, s, n, CAVE_DEC);			\
+		__RUNNING_AVG_STAT2(d, s, n, SKIP_FAST);		\
+		__RUNNING_AVG_STAT2(d, s, n, SKIP_SLOW);		\
+		__RUNNING_AVG_STAT2(d, s, n, SKIP_REPLAY);		\
+		__RUNNING_AVG_STAT2(d, s, n, SKIP_RACE);		\
+		__RUNNING_AVG_STAT(d, s, n, wait_target_counter);	\
+		__RUNNING_AVG_STAT(d, s, n, wait_target_time);		\
+		__RUNNING_AVG_STAT(d, s, n, wait_curr_counter);		\
+		__RUNNING_AVG_STAT(d, s, n, wait_curr_time);		\
+		n++;							\
+	} while (0)
 
 	spin_lock_irqsave(&cave_stat_avg_lock, flags);
-	for (j = 0; j < CAVE_CASES; j++) {
-		avg.counter[j] += t.counter[j];
-		avg.time[j] += t.time[j];
-	}
-	avg.wait_target_counter += t.wait_target_counter;
-	avg.wait_target_time += t.wait_target_time;
-	avg.wait_curr_counter += t.wait_curr_counter;
-	avg.wait_curr_time += t.wait_curr_time;
-
 	cave_stat_avg[0] = t;
 	RUNNING_AVG_STAT(cave_stat_avg[1], t, stat_samples[0], 1 * CAVE_STATS_MINUTE);
 	RUNNING_AVG_STAT(cave_stat_avg[2], t, stat_samples[1], 5 * CAVE_STATS_MINUTE);
@@ -217,7 +251,6 @@ static void stats_init(void)
 		memset(t, 0, sizeof(struct cave_stats));
 	}
 
-	memset(&avg, 0, sizeof(avg));
 	memset(cave_stat_avg, 0, sizeof(cave_stat_avg));
 	stat_samples[0] = 0;
 	stat_samples[1] = 0;
@@ -327,6 +360,9 @@ static void wait_curr_voffset(long new_voffset)
 	unsigned long long start;
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
 
+	if (new_voffset >= curr_voffset)
+		return;
+
 	start = rdtsc();
 #endif
 
@@ -382,8 +418,6 @@ static inline void _cave_switch(cave_data_t new_context)
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 	unsigned long long start;
-
-	start = rdtsc();
 #endif
 
 	/* Fast path: check cave_enable outside of the cave_lock.
@@ -393,7 +427,11 @@ static inline void _cave_switch(cave_data_t new_context)
 	if (!cave_enabled)
 		return;
 
-	cave_lock(flags, inc);
+#ifdef CONFIG_UNISERVER_CAVE_STATS
+	start = rdtsc();
+#endif
+
+	cave_lock(flags, LOCK_INC, start);
 
 	if (!cave_enabled) {
 		cave_unlock(flags);
@@ -421,17 +459,17 @@ static inline void _cave_switch(cave_data_t new_context)
 		write_voffset_msr(new_voffset);
 
 		cave_unlock(flags);
+		end_measure(start, CAVE_INC);
 
 		wait_target_voffset(new_voffset);
 
-		end_measure(start, CAVE_INC);
 		return;
 	}
 
 	if (new_voffset == target_voffset) {
 		cave_unlock(flags);
-		wait_curr_voffset(new_voffset);
 		end_measure(start, SKIP_FAST);
+		wait_curr_voffset(new_voffset);
 		return;
 	}
 
@@ -452,7 +490,7 @@ static inline void _cave_switch(cave_data_t new_context)
 
 	/* new_voffset > target_voffset */
 
-	cave_lock(flags, dec);
+	cave_lock(flags, LOCK_DEC);
 
 	switch_path_contention--;
 
@@ -496,7 +534,6 @@ static inline void _cave_switch(cave_data_t new_context)
 	write_voffset(selected_voffset);
 	cave_unlock(flags);
 	end_measure(start, CAVE_DEC);
-
 }
 
 __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
@@ -561,14 +598,13 @@ static int _print_cave_stats(char *buf, struct cave_stats *stat, const bool raw)
 	int ret = 0;
 	int j;
 
-	unsigned long long time = 0;
-	unsigned long long counter = 0;
+	unsigned long long time;
+	unsigned long long counter;
 
-	struct cave_stats t = avg;
+	struct cave_stats t;
 
 #define SKIP(x)						\
 	stat[x].skip =					\
-		stat[x].counter[SKIP_INC_WAIT] +	\
 		stat[x].counter[SKIP_FAST] +		\
 		stat[x].counter[SKIP_SLOW] +		\
 		stat[x].counter[SKIP_REPLAY] +		\
@@ -581,8 +617,10 @@ static int _print_cave_stats(char *buf, struct cave_stats *stat, const bool raw)
 
 #undef SKIP
 
-#define LOCKED(x)				\
-	stat[x].locked = stat[x].locked_inc + stat[x].locked_dec
+#define LOCKED(x)						\
+	stat[x].locked =					\
+		stat[x].counter[CAVE_SWITCH_CASES + LOCK_INC] +	\
+		stat[x].counter[CAVE_SWITCH_CASES + LOCK_DEC]
 
 	LOCKED(0);
 	LOCKED(1);
@@ -597,112 +635,117 @@ static int _print_cave_stats(char *buf, struct cave_stats *stat, const bool raw)
 	stat[2].total = stat[2].counter[CAVE_INC] + stat[2].counter[CAVE_DEC] + stat[2].skip + 1;
 	stat[3].total = stat[3].counter[CAVE_INC] + stat[3].counter[CAVE_DEC] + stat[3].skip + 1;
 
+#define SEPARATOR()	ret += sprintf(buf + ret, "\n")
+
 	if (raw) {
 #define S(x)	stat[0].x, stat[1].x, stat[2].x, stat[3].x
 #define S2(x)	stat[0].counter[x], stat[1].counter[x], stat[2].counter[x], stat[3].counter[x]
 
 #define PRINT(x)	ret += sprintf(buf + ret, #x " %llu %llu %llu %llu\n", S(x))
 #define PRINT2(x)	ret += sprintf(buf + ret, #x " %llu %llu %llu %llu\n", S2(x))
+#define PRINT3(ofs, x)	ret += sprintf(buf + ret, #x " %llu %llu %llu %llu\n", S2(ofs + x))
 
+		ret += sprintf(buf + ret, "lock%% current 1min 5min 10min\n");
 		PRINT(locked);
-		PRINT(locked_inc);
-		PRINT(locked_dec);
+		PRINT3(CAVE_SWITCH_CASES, LOCK_INC);
+		PRINT3(CAVE_SWITCH_CASES, LOCK_DEC);
+		SEPARATOR();
+		ret += sprintf(buf + ret, "switch%% current 1min 5min 10min\n");
 		PRINT2(CAVE_INC);
 		PRINT2(CAVE_DEC);
 		PRINT(skip);
-		PRINT2(SKIP_INC_WAIT);
+		SEPARATOR();
 		PRINT2(SKIP_FAST);
 		PRINT2(SKIP_SLOW);
 		PRINT2(SKIP_REPLAY);
 		PRINT2(SKIP_RACE);
 
+#undef PRINT3
 #undef PRINT2
 #undef PRINT
 #undef S
 	}
 	else {
-#define __FIXED_STAT(d, x, __s) d.x = 100 * (d.x << __s) / d.total
-#define __FIXED_STAT2(d, x, __s) d.counter[x] = 100 * (d.counter[x] << __s) / d.total
-#define FIXED_STAT(d, __s)				\
-		__FIXED_STAT(d, locked,    __s);	\
-		__FIXED_STAT(d, locked_inc,    __s);	\
-		__FIXED_STAT(d, locked_dec,    __s);	\
-		__FIXED_STAT2(d, CAVE_INC,       __s);	\
-		__FIXED_STAT2(d, CAVE_DEC,       __s);	\
-		__FIXED_STAT(d, skip,      __s);	\
-		__FIXED_STAT2(d, SKIP_INC_WAIT, __s);	\
-		__FIXED_STAT2(d, SKIP_FAST, __s);	\
-		__FIXED_STAT2(d, SKIP_SLOW, __s);	\
-		__FIXED_STAT2(d, SKIP_REPLAY, __s);	\
-		__FIXED_STAT2(d, SKIP_RACE, __s);
-
-		FIXED_STAT(stat[0], FSHIFT);
-		FIXED_STAT(stat[1], FSHIFT);
-		FIXED_STAT(stat[2], FSHIFT);
-		FIXED_STAT(stat[3], FSHIFT);
-
+#define F(d, x) (100 * ((d).x << FSHIFT) / (d).total)
 #define S(x)	STAT_INT(x), STAT_FRAC(x)
-#define P(x)	S(stat[0].x), S(stat[1].x), S(stat[2].x), S(stat[3].x)
-#define P2(x)	S(stat[0].counter[x]), S(stat[1].counter[x]), S(stat[2].counter[x]), S(stat[3].counter[x])
+#define P(x)	S(F(stat[0], x)), S(F(stat[1], x)), S(F(stat[2], x)), S(F(stat[3], x))
+#define P2(x)	S(F(stat[0], counter[x])), S(F(stat[1], counter[x])), S(F(stat[2], counter[x])), S(F(stat[3], counter[x]))
 #define PRINT(x)	ret += sprintf(buf + ret, #x " "		\
 				       "%2llu.%02llu %2llu.%02llu %2llu.%02llu %2llu.%02llu\n", P(x))
 #define PRINT2(x)	ret += sprintf(buf + ret, #x " "		\
 				       "%2llu.%02llu %2llu.%02llu %2llu.%02llu %2llu.%02llu\n", P2(x))
+#define PRINT3(ofs, x)	ret += sprintf(buf + ret, #x " "		\
+				       "%2llu.%02llu %2llu.%02llu %2llu.%02llu %2llu.%02llu\n", P2(ofs + x))
 
+		ret += sprintf(buf + ret, "lock%% current 1min 5min 10min\n");
 		PRINT(locked);
-		PRINT(locked_inc);
-		PRINT(locked_dec);
+		PRINT3(CAVE_SWITCH_CASES, LOCK_INC);
+		PRINT3(CAVE_SWITCH_CASES, LOCK_DEC);
+		SEPARATOR();
+		ret += sprintf(buf + ret, "switch%% current 1min 5min 10min\n");
 		PRINT2(CAVE_INC);
 		PRINT2(CAVE_DEC);
 		PRINT(skip);
-		PRINT2(SKIP_INC_WAIT);
+		SEPARATOR();
 		PRINT2(SKIP_FAST);
 		PRINT2(SKIP_SLOW);
 		PRINT2(SKIP_REPLAY);
 		PRINT2(SKIP_RACE);
 
+#undef PRINT3
 #undef PRINT2
 #undef PRINT
+#undef P2
 #undef P
 #undef S
-#undef __FIXED_STAT
-#undef FIXED_STAT
+#undef F
 	}
+
+#undef SEPARATOR
 
 #define F(x, t) 100 * ((x) << FSHIFT) / (t)
 #define S(x, t)	STAT_INT(F(x, t)), STAT_FRAC(F(x, t))
 #define FMT	"%2llu.%02llu"
 
-	for (j = 0; j < CAVE_CASES; j++) {
+	time = 0;
+	counter = 0;
+	t = stat[1];
+
+	for (j = 0; j < CAVE_SWITCH_CASES; j++) {
 		time += t.time[j];
 		counter += t.counter[j];
 	}
 
-	ret += sprintf(buf + ret, "name cycles %% %%\n");
-
 	if (time == 0 || counter == 0)
 		return ret;
 
-	ret += sprintf(buf + ret, "total %llu\n", time / counter);
+	ret += sprintf(buf + ret, "\nOverhead_delay cycles_avg  total_avg%%\n");
+	ret += sprintf(buf + ret, "total_avg %llu 100.00 (debug: t   =%llu, c   =%llu)\n",
+		       time / counter, time, counter);
 
-	for (j = 0; j < CAVE_CASES; j++) {
-		ret += sprintf(buf + ret, "%s %llu " FMT "\n", cave_stat_name[j],
-			       t.time[j] / (t.counter[j] + 1),
-			       S(t.time[j], time));
+	for (j = 0; j < CAVE_SWITCH_CASES + CAVE_LOCK_CASES; j++) {
+		ret += sprintf(buf + ret, "%s %llu " FMT " (debug: t[j]=%llu, c[j]=%llu)\n", cave_stat_name[j],
+			       t.time[j] / (t.counter[j] ? t.counter[j] : 1),
+			       S(t.time[j], time),
+			       t.time[j], t.counter[j]
+			       );
 	}
 
+	if (t.wait_target_counter != 0 || t.wait_curr_counter != 0)
+		ret += sprintf(buf + ret, "\nVoltage_delay cycles_avg total_avg%% relative_avg%%\n");
+
 	if (t.wait_target_counter != 0) {
-		ret += sprintf(buf + ret, "wait_target/{inc,total} %llu " FMT " " FMT "\n",
+		ret += sprintf(buf + ret, "wait_target/{total,inc} %llu " FMT " " FMT "\n",
 			       t.wait_target_time / t.wait_target_counter,
-			       S(t.wait_target_time, t.time[CAVE_INC]),
-			       S(t.wait_target_time, time));
+			       S(t.wait_target_time, time),
+			       S(t.wait_target_time, t.time[CAVE_INC]));
 	}
 
 	if (t.wait_curr_counter != 0) {
-		ret += sprintf(buf + ret, "wait_curr/{inc_wait,total} %llu " FMT " " FMT "\n",
+		ret += sprintf(buf + ret, "wait_curr/{total,eq_dec} %llu " FMT " " FMT "\n",
 			       t.wait_curr_time / t.wait_curr_counter,
-			       S(t.wait_curr_time, time - t.time[CAVE_INC]),
-			       S(t.wait_curr_time, time));
+			       S(t.wait_curr_time, time),
+			       S(t.wait_curr_time, time - t.time[CAVE_INC]));
 	}
 
 #undef FMT
@@ -716,17 +759,17 @@ static int print_cave_stats(char *buf, const bool raw)
 {
 	unsigned long flags;
 	int ret = 0;
-	struct cave_stats stat[4];
+	static struct cave_stats tmp_stat[4];
 
 	spin_lock_irqsave(&cave_stat_avg_lock, flags);
-	stat[0] = cave_stat_avg[0];
-	stat[1] = cave_stat_avg[1];
-	stat[2] = cave_stat_avg[2];
-	stat[3] = cave_stat_avg[3];
+	tmp_stat[0] = cave_stat_avg[0];
+	tmp_stat[1] = cave_stat_avg[1];
+	tmp_stat[2] = cave_stat_avg[2];
+	tmp_stat[3] = cave_stat_avg[3];
 	spin_unlock_irqrestore(&cave_stat_avg_lock, flags);
 
 	if (cave_enabled)
-		ret += _print_cave_stats(buf + ret, stat, raw);
+		ret += _print_cave_stats(buf + ret, tmp_stat, raw);
 
 	return ret;
 }
