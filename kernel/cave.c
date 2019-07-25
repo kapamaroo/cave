@@ -79,7 +79,6 @@ static inline void _end_measure(unsigned long long start, enum cave_switch_case 
 
 static inline void _end_lock_measure(unsigned long long start, enum cave_lock_case c)
 {
-#if 1
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
 
 	unsigned long long time = rdtsc() - start;
@@ -88,7 +87,6 @@ static inline void _end_lock_measure(unsigned long long start, enum cave_lock_ca
 
 	t->time[CAVE_SWITCH_CASES + c] += time;
 	t->counter[CAVE_SWITCH_CASES + c]++;
-#endif
 }
 
 #define end_measure(start, c)	_end_measure(start, c)
@@ -112,22 +110,22 @@ static DEFINE_SPINLOCK(cave_lock);
 #define _cave_lock_2(flags, lock_case)					\
 	do {								\
 		bool done = false;					\
-		unsigned long long start = rdtsc();			\
+		unsigned long long __start = rdtsc();			\
 		while (!spin_trylock_irqsave(&cave_lock, flags)) 	\
 			if (!done) 					\
 				done = true;				\
 		if (done)						\
-			_end_lock_measure(start, lock_case);		\
+			_end_lock_measure(__start, lock_case);		\
 	} while (0)
 
-#define _cave_lock_3(flags, lock_case, start)				\
+#define _cave_lock_3(flags, lock_case, __start)				\
 	do {								\
 		bool done = false;					\
 		while (!spin_trylock_irqsave(&cave_lock, flags)) 	\
 			if (!done) 					\
 				done = true;				\
 		if (done)						\
-			_end_lock_measure(start, lock_case);		\
+			_end_lock_measure(__start, lock_case);		\
 	} while (0)
 #endif
 
@@ -196,7 +194,7 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 		cave_unlock(flags);
 
 		for (j = 0; j < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; j++) {
-			WARN_ON_ONCE((c.time[j] == 0) ^ (c.counter[j] == 0));
+			/* WARN_ON_ONCE((c.time[j] == 0) ^ (c.counter[j] == 0)); */
 			if (c.counter[j]) {
 				t.time[j] += c.time[j];
 				t.counter[j] += c.counter[j];
@@ -357,7 +355,7 @@ static long read_target_voffset(void)
 	return target_voffset_cached;
 }
 
-static void wait_curr_voffset(long new_voffset)
+static inline void wait_curr_voffset(long new_voffset)
 {
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 	unsigned long long start;
@@ -378,7 +376,7 @@ static void wait_curr_voffset(long new_voffset)
 #endif
 }
 
-static void wait_target_voffset(long new_voffset)
+static inline void wait_target_voffset(long new_voffset)
 {
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 	unsigned long long start;
@@ -732,7 +730,7 @@ static int _print_cave_stats(char *buf, struct cave_stats *stat, const bool raw)
 		return ret;
 
 	ret += sprintf(buf + ret, "\nOverhead_delay cycles_avg  time_avg%%\n");
-	ret += sprintf(buf + ret, "total_avg %llu 100.00 (debug: time__=%llu, c___=%llu)\n",
+	ret += sprintf(buf + ret, "total_avg %llu 100.00 (debug: time=%llu, c___=%llu)\n",
 		       cycles / CAVE_SWITCH_CASES, time, counter);
 
 	for (j = 0; j < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; j++) {
