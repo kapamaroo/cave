@@ -1235,6 +1235,8 @@ int cave_init(void)
 		return err;
 	}
 
+	bitmap_fill(syscall_enabled, __NR_syscall_max);
+
 	cave_lock(flags);
 
 	voffset = read_voffset_msr();
