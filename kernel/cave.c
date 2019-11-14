@@ -182,7 +182,7 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 
 	memset(&t, 0, sizeof(t));
 
-	for_each_possible_cpu(i) {
+	for_each_online_cpu(i) {
 		struct cave_stats c;
 
 		/* local copy */
@@ -406,7 +406,7 @@ static long select_voffset(void)
 	long new_voffset = LONG_MAX;
 	int i;
 
-	for_each_possible_cpu(i) {
+	for_each_online_cpu(i) {
 		cave_data_t tmp = per_cpu(context, i);
 		if(tmp.voffset < new_voffset)
 			new_voffset = tmp.voffset;
