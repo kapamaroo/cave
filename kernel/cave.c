@@ -741,7 +741,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 			// this_cpu_write(context, CAVE_NOMINAL_CONTEXT);
 			write_voffset(CAVE_NOMINAL_VOFFSET);
 			stats_init();
-			bitmap_fill(syscall_enabled, __NR_syscall_max);
+			// bitmap_fill(syscall_enabled, __NR_syscall_max);
 			cave_enabled = 1;
 			show_msg = true;
 		}
@@ -753,7 +753,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 		cave_lock(flags);
 		if (cave_enabled) {
 			cave_enabled = 0;
-			bitmap_zero(syscall_enabled, __NR_syscall_max);
+			// bitmap_zero(syscall_enabled, __NR_syscall_max);
 			stats_clear();
 			/* in case we race with a CPU on the decrease path,
 			 * set context to nominal to avoid decrease in voltage
