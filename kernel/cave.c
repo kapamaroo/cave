@@ -635,8 +635,10 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, const int t_min)
 	for (j = 0; j < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; j++) {
 		if (j == SKIP_FAST || j == CAVE_SWITCH_CASES || j == CAVE_SWITCH_CASES + CAVE_LOCK_CASES)
 			SEPARATOR();
-		if (t->counter[j] == 0)
+		if (t->counter[j] == 0) {
+			SEPARATOR();
 			continue;
+		}
 		ret += sprintf(buf + ret, "%s %llu " FMT " " FMT
 			       "\n", cave_stat_name[j],
 			       t->cycles[j],
