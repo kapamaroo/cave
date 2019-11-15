@@ -124,6 +124,12 @@ ENDPROC(native_usergs_sysret64)
 #endif
 .endm
 
+.macro EXIT_HOOK_SYSCALL
+#ifdef CONFIG_UNISERVER_CAVE
+	call	cave_syscall_exit_switch
+#endif
+.endm
+
 /*
  * 64-bit SYSCALL instruction entry. Up to 6 arguments in registers.
  *
@@ -248,7 +254,7 @@ entry_SYSCALL_64_fastpath:
 	testl	$_TIF_ALLWORK_MASK, TASK_TI_flags(%r11)
 	jnz	1f
 
-	EXIT_HOOK
+	EXIT_HOOK_SYSCALL
 
 	LOCKDEP_SYS_EXIT
 	TRACE_IRQS_ON		/* user mode is traced as IRQs on */
@@ -348,7 +354,7 @@ return_from_SYSCALL_64:
 	 * perf profiles. Nothing jumps here.
 	 */
 syscall_return_via_sysret:
-	EXIT_HOOK
+	EXIT_HOOK_SYSCALL
 
 #ifdef CONFIG_UNISERVER_CAVE
 	/* voffset calls may clobber rcx and r11 */
@@ -361,7 +367,7 @@ syscall_return_via_sysret:
 	USERGS_SYSRET64
 
 opportunistic_sysret_failed:
-	EXIT_HOOK
+	EXIT_HOOK_SYSCALL
 
 	SWAPGS
 	jmp	restore_c_regs_and_iret
@@ -462,7 +468,7 @@ ENTRY(ret_from_fork)
 	call	syscall_return_slowpath	/* returns with IRQs disabled */
 	TRACE_IRQS_ON			/* user mode is traced as IRQS on */
 
-	EXIT_HOOK
+	EXIT_HOOK_SYSCALL
 
 	SWAPGS
 	FRAME_END

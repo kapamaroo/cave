@@ -11,9 +11,112 @@
 #include <linux/hrtimer.h>
 #include <linux/slab.h>
 #include <linux/syscalls.h>
+#include <linux/vmalloc.h>
 #include <generated/asm-offsets.h>
 
 #define CAVE_NOMINAL_VOFFSET	0
+
+static volatile int cave_enabled = 0;
+
+struct elem {
+	u64 time;
+	u64 voltage;
+};
+
+struct log {
+	struct elem *buf;
+	int write;
+	int read;
+};
+
+enum reason {
+	ENTRY = 0,
+	EXIT,
+	ENTRY_SYSCALL,
+	EXIT_SYSCALL
+};
+
+#define BUF_SZ	(1ULL << 21)
+DEFINE_PER_CPU(struct log, voltage_log);
+DEFINE_PER_CPU(unsigned long, syscall_num);
+
+static void init_log(void)
+{
+	int i;
+
+	for_each_possible_cpu(i) {
+		struct log *log = per_cpu_ptr(&voltage_log, i);
+
+		log->buf = vmalloc(BUF_SZ);
+		if (!log->buf)
+			pr_warn("cave: no mem\n");
+		log->write = 0;
+		log->read = 0;
+	}
+}
+
+static u64 read_voltage(void)
+{
+	u64 value;
+
+	rdmsrl(0x198, value);
+	value = ((value * 100) >> 45) * 10;
+
+	return value;
+}
+
+static void add_elem(struct elem new)
+{
+	struct log *log = this_cpu_ptr(&voltage_log);
+	int write = READ_ONCE(log->write);
+
+	if (write < BUF_SZ) {
+		log->buf[write] = new;
+		smp_store_release(&log->write, write + 1);
+		return;
+	}
+
+	WARN_ON_ONCE(1);
+}
+
+static int remove_elem(struct elem *element, int num, int cpu)
+{
+	struct log *log = per_cpu_ptr(&voltage_log, cpu);
+	int read = READ_ONCE(log->read);
+
+	num = min_t(int, num, log->write - read);
+	if (num) {
+		memcpy(element, log->buf + read, num * sizeof(struct elem));
+		smp_store_release(&log->read, read + num);
+	}
+
+	return num;
+}
+
+static unsigned long long log_voltage(void)
+{
+	static int sample = 0;
+	static int avg = 0;
+	struct elem new;
+
+	if (!cave_enabled)
+		return 0;
+
+	new.time = rdtsc();
+	new.voltage = read_voltage();
+
+	add_elem(new);
+	avg += new.voltage;
+	if (++sample == 1000) {
+		pr_info("cave: cpu%d %llu avg=%d\n", smp_processor_id(), new.voltage, avg / 1000);
+		trace_printk("cave: cpu%d %llu\n", smp_processor_id(), new.voltage);
+		sample = 0;
+		avg = 0;
+	}
+	barrier();
+
+	return new.time;
+}
 
 enum cave_switch_case {
 	CAVE_INC = 0,
@@ -61,8 +164,30 @@ static char *cave_stat_name[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASE
 };
 
 DEFINE_PER_CPU(struct cave_stats, time_stats);
+DECLARE_BITMAP(syscall_enabled, __NR_syscall_max);
 
-static inline void _end_measure(unsigned long long start, enum cave_switch_case c)
+static inline unsigned long long start_measure(const enum reason reason)
+{
+	unsigned long long ret;
+
+#if 1
+	if (reason == EXIT_SYSCALL) {
+		unsigned long syscall_nr = this_cpu_read(syscall_num);
+
+		if (test_bit(syscall_nr, syscall_enabled))
+			ret = log_voltage();
+		else
+			ret = rdtsc();
+	}
+	else
+#endif
+		ret = rdtsc();
+
+	return ret;
+}
+
+static inline void _end_measure(unsigned long long start, enum cave_switch_case c,
+				const enum reason reason)
 {
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
 
@@ -86,15 +211,14 @@ static inline void _end_lock_measure(unsigned long long start, enum cave_lock_ca
 	t->counter[CAVE_SWITCH_CASES + c]++;
 }
 
-#define end_measure(start, c)	_end_measure(start, c)
+#define end_measure(start, c, r)	_end_measure(start, c, r)
 #else
-#define end_measure(start, c)
+#define end_measure(start, c, r)
 #endif
 
 static struct kobject *cave_kobj;
 static struct kobject *syscall_enabled_kobj;
 
-static volatile int cave_enabled = 0;
 static volatile int cave_random_vmin_enabled __read_mostly = 0;
 
 static DEFINE_SPINLOCK(cave_lock);
@@ -151,8 +275,6 @@ DEFINE_PER_CPU(cave_data_t, context) = CAVE_NOMINAL_CONTEXT;
 
 static volatile long target_voffset_cached = CAVE_NOMINAL_VOFFSET;
 static volatile long curr_voffset = CAVE_NOMINAL_VOFFSET;
-
-DECLARE_BITMAP(syscall_enabled, __NR_syscall_max);
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 static DEFINE_SPINLOCK(cave_stat_avg_lock);
@@ -415,7 +537,7 @@ static long select_voffset(void)
 	return new_voffset;
 }
 
-static inline void _cave_switch(cave_data_t new_context)
+static inline void _cave_switch(cave_data_t new_context, const enum reason reason)
 {
 	unsigned long flags;
 	long new_voffset = new_context.voffset;
@@ -436,7 +558,7 @@ static inline void _cave_switch(cave_data_t new_context)
 		return;
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
-	start = rdtsc();
+	start = start_measure(reason);
 #endif
 
 	cave_lock(flags, LOCK_INC, start);
@@ -469,7 +591,7 @@ static inline void _cave_switch(cave_data_t new_context)
 		cave_unlock(flags);
 
 		wait_target_voffset(new_voffset);
-		end_measure(start, CAVE_INC);
+		end_measure(start, CAVE_INC, reason);
 
 		return;
 	}
@@ -477,7 +599,7 @@ static inline void _cave_switch(cave_data_t new_context)
 	if (new_voffset == target_voffset) {
 		cave_unlock(flags);
 		wait_curr_voffset(new_voffset);
-		end_measure(start, SKIP_FAST);
+		end_measure(start, SKIP_FAST, reason);
 		return;
 	}
 
@@ -510,7 +632,7 @@ static inline void _cave_switch(cave_data_t new_context)
 	/* Skip cascade decreases of voltage from many CPUs */
 	if (switch_path_contention) {
 		cave_unlock(flags);
-		end_measure(start, SKIP_REPLAY);
+		end_measure(start, SKIP_REPLAY, reason);
 		return;
 	}
 
@@ -519,13 +641,13 @@ static inline void _cave_switch(cave_data_t new_context)
 
 	if (selected_voffset == updated_voffset) {
 		cave_unlock(flags);
-		end_measure(start, SKIP_SLOW);
+		end_measure(start, SKIP_SLOW, reason);
 		return;
 	}
 
 	if (selected_voffset < updated_voffset) {
 		cave_unlock(flags);
-		end_measure(start, SKIP_RACE);
+		end_measure(start, SKIP_RACE, reason);
 		return;
 	}
 
@@ -541,27 +663,33 @@ static inline void _cave_switch(cave_data_t new_context)
 	 */
 	write_voffset(selected_voffset);
 	cave_unlock(flags);
-	end_measure(start, CAVE_DEC);
+	end_measure(start, CAVE_DEC, reason);
 }
 
 __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 {
 	cave_data_t syscall_entry_context = CAVE_KERNEL_CONTEXT;
 
+	this_cpu_write(syscall_num, syscall_nr);
 	if (test_bit(syscall_nr, syscall_enabled))
 		syscall_entry_context = CAVE_SYSCALL_CONTEXT;
 
-	_cave_switch(syscall_entry_context);
+	_cave_switch(syscall_entry_context, ENTRY_SYSCALL);
 }
 
 __visible void cave_entry_switch(void)
 {
-	_cave_switch(CAVE_KERNEL_CONTEXT);
+	_cave_switch(CAVE_KERNEL_CONTEXT, ENTRY);
 }
 
 __visible void cave_exit_switch(void)
 {
-	_cave_switch(current->cave_data);
+	_cave_switch(current->cave_data, EXIT);
+}
+
+__visible void cave_syscall_exit_switch(void)
+{
+	_cave_switch(current->cave_data, EXIT_SYSCALL);
 }
 
 static void __cave_set_task(struct task_struct *p, long voffset)
@@ -1059,15 +1187,39 @@ ssize_t debug_store(struct kobject *kobj, struct kobj_attribute *attr,
 static
 ssize_t ctl_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
-	char *s;
-	int ret;
+	static char *s = (void *)-1;
+	int ret = 0;
+	int cpu;
+	struct elem *e;
 
-	s = kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if (s == (void *)-1)
+		s = kmalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!s)
 		return 0;
-	bitmap_print_to_pagebuf(false, s, syscall_enabled, __NR_syscall_max);
-	ret = sprintf(buf,"cave: syscall bitmap: %s\n", s);
-	kfree(s);
+	// bitmap_print_to_pagebuf(false, s, syscall_enabled, __NR_syscall_max);
+	// ret = snprintf(buf, PAGE_SIZE, "cave: syscall bitmap: %s\n", s);
+
+	e = (struct elem *)s;
+	// ret += snprintf(buf + ret, PAGE_SIZE - ret,  "s=[%p,%p], buf=%p\n", s, s + PAGE_SIZE - 1, buf);
+	for_each_online_cpu(cpu) {
+		int i;
+		int n;
+		int limit = PAGE_SIZE / max_t(int, sizeof(struct elem), 24 /* sizeof printed element */);
+
+		n = remove_elem(e, limit, cpu);
+		for (i = 0; i < n; i++) {
+			ret += scnprintf(buf + ret, PAGE_SIZE - ret, "cpu%d %llu %llu\n",
+					cpu, e[i].time, e[i].voltage);
+			if (ret >= PAGE_SIZE) {
+				pr_info("cave: max output %d\n", ret);
+				goto out;
+			}
+		}
+		// cond_resched();
+	}
+
+ out:
+	// kfree(s);
 
 	return ret;
 }
@@ -1242,6 +1394,8 @@ int cave_init(void)
 	voffset = read_voffset_msr();
 	write_voffset(CAVE_NOMINAL_VOFFSET);
 	cave_unlock(flags);
+
+	init_log();
 
 	pr_info("cave: msr offset: %ld\n", -voffset);
 
