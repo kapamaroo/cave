@@ -95,6 +95,7 @@ static int remove_elem(struct elem *element, int num, int cpu)
 
 static unsigned long long log_voltage(void)
 {
+	const int MAX = 1000;
 	static int sample = 0;
 	static int avg = 0;
 	struct elem new;
@@ -107,9 +108,8 @@ static unsigned long long log_voltage(void)
 
 	add_elem(new);
 	avg += new.voltage;
-	if (++sample == 1000) {
-		pr_info("cave: cpu%d %llu avg=%d\n", smp_processor_id(), new.voltage, avg / 1000);
-		trace_printk("cave: cpu%d %llu\n", smp_processor_id(), new.voltage);
+	if (++sample == MAX) {
+		trace_printk("cave: cpu%d voltage=%llu avg=%d\n", smp_processor_id(), new.voltage, avg / MAX);
 		sample = 0;
 		avg = 0;
 	}
@@ -1204,7 +1204,7 @@ ssize_t ctl_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	for_each_online_cpu(cpu) {
 		int i;
 		int n;
-		int limit = PAGE_SIZE / max_t(int, sizeof(struct elem), 24 /* sizeof printed element */);
+		int limit = PAGE_SIZE / max_t(int, sizeof(struct elem), 32 /* sizeof printed element */);
 
 		n = remove_elem(e, limit, cpu);
 		for (i = 0; i < n; i++) {
