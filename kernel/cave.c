@@ -20,7 +20,8 @@ static volatile int cave_enabled = 0;
 
 struct elem {
 	u64 time;
-	u64 voltage;
+	u32 voltage;
+	u32 voffset;
 };
 
 struct log {
@@ -106,10 +107,17 @@ static unsigned long long log_voltage(void)
 	new.time = rdtsc();
 	new.voltage = read_voltage();
 
+	wrmsrl(0x150, 0x8000001000000000);
+	rdmsrl(0x150, new.voffset);
+#define TO_VOFFSET_VAL(__data)    (__data ? (0x800ULL - ((u64)__data >> 21)) : 0ULL)
+	new.voffset =  TO_VOFFSET_VAL(new.voffset);
+#undef TO_VOFFSET_VAL
+
 	add_elem(new);
 	avg += new.voltage;
 	if (++sample == MAX) {
-		trace_printk("cave: cpu%d voltage=%llu avg=%d\n", smp_processor_id(), new.voltage, avg / MAX);
+		trace_printk("cave: cpu%d voltage=%u voffset=%u avg=%d\n",
+			     smp_processor_id(), new.voltage, new.voffset, avg / MAX);
 		sample = 0;
 		avg = 0;
 	}
@@ -1208,8 +1216,8 @@ ssize_t ctl_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 
 		n = remove_elem(e, limit, cpu);
 		for (i = 0; i < n; i++) {
-			ret += scnprintf(buf + ret, PAGE_SIZE - ret, "cpu%d %llu %llu\n",
-					cpu, e[i].time, e[i].voltage);
+			ret += scnprintf(buf + ret, PAGE_SIZE - ret, "cpu%d %llu %u %u\n",
+					 cpu, e[i].time, e[i].voltage, e[i].voffset);
 			if (ret >= PAGE_SIZE) {
 				pr_info("cave: max output %d\n", ret);
 				goto out;
@@ -1404,6 +1412,7 @@ int cave_init(void)
 late_initcall(cave_init);
 
 #define CAVE_SET_TASK_VOFFSET	128
+#define CAVE_LOOP		129
 
 SYSCALL_DEFINE3(uniserver_ctl, int, action, int, op1, int, op2)
 {
@@ -1417,6 +1426,16 @@ SYSCALL_DEFINE3(uniserver_ctl, int, action, int, op1, int, op2)
 		       task_tgid_vnr(p), -p->cave_data.voffset);
 		*/
 		return 0;
+	case CAVE_LOOP:
+		{
+			int i;
+			unsigned long sum = 0;
+
+			for (i = 0; i < op1; i++)
+				sum += op1 + op2 * i;
+
+			return sum;
+		}
 	}
 
 	return -1;
