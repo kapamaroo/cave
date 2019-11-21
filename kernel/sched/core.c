@@ -25,6 +25,7 @@
 #include <linux/profile.h>
 #include <linux/security.h>
 #include <linux/syscalls.h>
+#include <linux/cave_api.h>
 
 #include <asm/switch_to.h>
 #include <asm/tlb.h>
@@ -2877,6 +2878,8 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	/* Here we just switch the register state and the stack. */
 	switch_to(prev, next, prev);
 	barrier();
+
+	cave_context_switch_voltage(prev, next);
 
 	return finish_task_switch(prev);
 }

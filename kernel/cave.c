@@ -7,7 +7,7 @@
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
 #include <linux/random.h>
-#include <linux/cave.h>
+#include <linux/cave_data.h>
 #include <linux/hrtimer.h>
 #include <linux/slab.h>
 #include <linux/syscalls.h>
@@ -34,7 +34,8 @@ enum reason {
 	ENTRY = 0,
 	EXIT,
 	ENTRY_SYSCALL,
-	EXIT_SYSCALL
+	EXIT_SYSCALL,
+	CONTEXT_SWITCH
 };
 
 #define BUF_SZ	(1ULL << 21)
@@ -267,19 +268,19 @@ static volatile int cave_max_voffset __read_mostly = 400;
 static volatile int cave_kernel_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
 static volatile int cave_syscall_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
 
-#define CAVE_NOMINAL_CONTEXT	(cave_data_t){ .voffset = CAVE_NOMINAL_VOFFSET }
-#define CAVE_KERNEL_CONTEXT (cave_data_t){ .voffset = cave_kernel_voffset }
-#define CAVE_SYSCALL_CONTEXT (cave_data_t){ .voffset = cave_syscall_voffset }
+#define CAVE_NOMINAL_CONTEXT	(struct cave_context){ .voffset = CAVE_NOMINAL_VOFFSET }
+#define CAVE_KERNEL_CONTEXT (struct cave_context){ .voffset = cave_kernel_voffset }
+#define CAVE_SYSCALL_CONTEXT (struct cave_context){ .voffset = cave_syscall_voffset }
 
 #ifdef CONFIG_UNISERVER_CAVE_USERSPACE
 #define CAVE_DEFAULT_USERSPACE_VOFFSET	CONFIG_UNISERVER_CAVE_DEFAULT_USERSPACE_VOFFSET
 static volatile int cave_userspace_voffset __read_mostly = CAVE_DEFAULT_USERSPACE_VOFFSET;
-#define CAVE_USERSPACE_CONTEXT	(cave_data_t){ .voffset = cave_userspace_voffset }
+#define CAVE_USERSPACE_CONTEXT	(struct cave_context){ .voffset = cave_userspace_voffset }
 #else
 #define CAVE_USERSPACE_CONTEXT	CAVE_NOMINAL_CONTEXT
 #endif
 
-DEFINE_PER_CPU(cave_data_t, context) = CAVE_NOMINAL_CONTEXT;
+DEFINE_PER_CPU(struct cave_context, context) = CAVE_NOMINAL_CONTEXT;
 
 static volatile long target_voffset_cached = CAVE_NOMINAL_VOFFSET;
 static volatile long curr_voffset = CAVE_NOMINAL_VOFFSET;
@@ -424,14 +425,14 @@ static void cave_check_tasks(void)
 	for_each_process(p) {
 		struct cave_data *c = &p->cave_data;
 		if (p->flags & PF_KTHREAD) {
-			if (c->voffset != cave_kernel_voffset)
+			if (c->context.voffset != cave_kernel_voffset)
 				pr_warn("cave: kthread %s with %d voffset\n",
 					p->comm, c->voffset);
 		}
 		else {
-			if (c->voffset == cave_kernel_voffset)
+			if (c->context.voffset == cave_kernel_voffset)
 				pr_warn("cave: user thread %s with %d voffset\n",
-					p->comm, c->voffset);
+					p->comm, c->context.voffset);
 		}
 	}
 	read_unlock(&tasklist_lock);
@@ -537,7 +538,7 @@ static long select_voffset(void)
 	int i;
 
 	for_each_online_cpu(i) {
-		cave_data_t tmp = per_cpu(context, i);
+		struct cave_context tmp = per_cpu(context, i);
 		if(tmp.voffset < new_voffset)
 			new_voffset = tmp.voffset;
 	}
@@ -545,7 +546,7 @@ static long select_voffset(void)
 	return new_voffset;
 }
 
-static inline void _cave_switch(cave_data_t new_context, const enum reason reason)
+static inline void _cave_switch(struct cave_context new_context, const enum reason reason)
 {
 	unsigned long flags;
 	long new_voffset = new_context.voffset;
@@ -676,7 +677,7 @@ static inline void _cave_switch(cave_data_t new_context, const enum reason reaso
 
 __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 {
-	cave_data_t syscall_entry_context = CAVE_KERNEL_CONTEXT;
+	struct cave_context syscall_entry_context = CAVE_KERNEL_CONTEXT;
 
 	this_cpu_write(syscall_num, syscall_nr);
 	if (test_bit(syscall_nr, syscall_enabled))
@@ -692,17 +693,17 @@ __visible void cave_entry_switch(void)
 
 __visible void cave_exit_switch(void)
 {
-	_cave_switch(current->cave_data, EXIT);
+	_cave_switch(current->cave_data.context, EXIT);
 }
 
 __visible void cave_syscall_exit_switch(void)
 {
-	_cave_switch(current->cave_data, EXIT_SYSCALL);
+	_cave_switch(current->cave_data.context, EXIT_SYSCALL);
 }
 
 static void __cave_set_task(struct task_struct *p, long voffset)
 {
-	p->cave_data.voffset = voffset;
+	p->cave_data.context.voffset = voffset;
 }
 
 static void _cave_set_task(struct task_struct *p, long voffset)
@@ -718,7 +719,7 @@ static void _cave_set_task(struct task_struct *p, long voffset)
 /* should be protected by tasklist_lock */
 void cave_copy_task(struct task_struct *p, struct task_struct *parent)
 {
-	unsigned long voffset = parent->cave_data.voffset;
+	unsigned long voffset = parent->cave_data.context.voffset;
 
 	if (voffset < 0 || voffset > cave_max_voffset)
 		pr_warn("cave: pid %d comm=%s with no vmin", task_tgid_vnr(parent), parent->comm);
@@ -729,11 +730,22 @@ void cave_copy_task(struct task_struct *p, struct task_struct *parent)
 	__cave_set_task(p, voffset);
 }
 
+void cave_context_switch_voltage(struct task_struct *prev, struct task_struct *next)
+{
+	struct cave_context restore_context = this_cpu_read(context);
+
+	prev->cave_data.active_context = restore_context;
+	trace_printk("cave: cs: voffset: %ld --> %ld\n",
+		     next->cave_data.active_context.voffset, restore_context.voffset);
+	barrier();
+	_cave_switch(next->cave_data.active_context, CONTEXT_SWITCH);
+}
+
 void cave_init_userspace(void)
 {
 	struct task_struct *p = current;
 
-	p->cave_data = CAVE_USERSPACE_CONTEXT;
+	p->cave_data.context = CAVE_USERSPACE_CONTEXT;
 }
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
@@ -1021,10 +1033,10 @@ ssize_t kernel_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 
 	write_lock_irq(&tasklist_lock);
 	for_each_possible_cpu(i)
-		idle_task(i)->cave_data = CAVE_KERNEL_CONTEXT;
+		idle_task(i)->cave_data.context = CAVE_KERNEL_CONTEXT;
 	for_each_process_thread(g, p)
 		if (p->flags & PF_KTHREAD)
-			p->cave_data = CAVE_KERNEL_CONTEXT;
+			p->cave_data.context = CAVE_KERNEL_CONTEXT;
 	write_unlock_irq(&tasklist_lock);
  out:
 	cave_unlock(flags);
@@ -1115,7 +1127,7 @@ ssize_t userspace_voffset_store(struct kobject *kobj, struct kobj_attribute *att
 	write_lock_irq(&tasklist_lock);
 	for_each_process_thread(g, p)
 		if (!(p->flags & PF_KTHREAD))
-			p->cave_data = CAVE_USERSPACE_CONTEXT;
+			p->cave_data.context = CAVE_USERSPACE_CONTEXT;
 	write_unlock_irq(&tasklist_lock);
  out:
 	cave_unlock(flags);
@@ -1423,7 +1435,7 @@ SYSCALL_DEFINE3(uniserver_ctl, int, action, int, op1, int, op2)
 		_cave_set_task(p, op2);
 		/*
 		pr_info("cave: pid %d voffset: %3ld\n",
-		       task_tgid_vnr(p), -p->cave_data.voffset);
+		       task_tgid_vnr(p), -p->cave_data.context.voffset);
 		*/
 		return 0;
 	case CAVE_LOOP:

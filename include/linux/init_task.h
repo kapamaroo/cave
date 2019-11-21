@@ -16,7 +16,7 @@
 #include <net/net_namespace.h>
 #include <linux/sched/rt.h>
 #include <linux/mm_types.h>
-#include <linux/cave.h>
+#include <linux/cave_data.h>
 
 #include <asm/thread_info.h>
 
