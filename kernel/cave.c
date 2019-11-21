@@ -701,33 +701,26 @@ __visible void cave_syscall_exit_switch(void)
 	_cave_switch(current->cave_data.context, EXIT_SYSCALL);
 }
 
-static void __cave_set_task(struct task_struct *p, long voffset)
+static void cave_set_task(struct task_struct *p, struct cave_context context)
 {
-	p->cave_data.context.voffset = voffset;
-}
-
-static void _cave_set_task(struct task_struct *p, long voffset)
-{
-	if (voffset < 0 || voffset > cave_max_voffset) {
-		pr_warn("cave: voffset out of range (%ld) comm=%s\n", voffset, p->comm);
-		voffset = 0;
-	}
-
-	__cave_set_task(p, voffset);
+	p->cave_data.context = context;
 }
 
 /* should be protected by tasklist_lock */
 void cave_copy_task(struct task_struct *p, struct task_struct *parent)
 {
-	unsigned long voffset = parent->cave_data.context.voffset;
+	struct cave_context context;
 
-	if (voffset < 0 || voffset > cave_max_voffset)
-		pr_warn("cave: pid %d comm=%s with no vmin", task_tgid_vnr(parent), parent->comm);
+	context.voffset = parent->cave_data.context.voffset;
+
+	if (context.voffset < 0 || context.voffset > cave_max_voffset)
+		pr_warn("cave: pid %d comm=%s with no vmin",
+			task_tgid_vnr(parent), parent->comm);
 
 	if (cave_random_vmin_enabled && !(p->flags & PF_KTHREAD))
-		voffset = get_random_long() % cave_max_voffset;
+		context.voffset = get_random_long() % cave_max_voffset;
 
-	__cave_set_task(p, voffset);
+	cave_set_task(p, context);
 }
 
 void cave_context_switch_voltage(struct task_struct *prev, struct task_struct *next)
@@ -1429,10 +1422,17 @@ late_initcall(cave_init);
 SYSCALL_DEFINE3(uniserver_ctl, int, action, int, op1, int, op2)
 {
 	struct task_struct *p = current;
+	struct cave_context context;
 
 	switch (action) {
 	case CAVE_SET_TASK_VOFFSET:
-		_cave_set_task(p, op2);
+		context.voffset = op2;
+		if (context.voffset < 0 || context.voffset > cave_max_voffset) {
+			pr_warn("cave: voffset out of range (%ld) comm=%s\n",
+				context.voffset, p->comm);
+			context.voffset = 0;
+		}
+		cave_set_task(p, context);
 		/*
 		pr_info("cave: pid %d voffset: %3ld\n",
 		       task_tgid_vnr(p), -p->cave_data.context.voffset);
