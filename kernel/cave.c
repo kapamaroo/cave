@@ -1404,12 +1404,9 @@ SYSCALL_DEFINE3(uniserver_ctl, int, action, int, op1, int, op2)
 	switch (action) {
 	case CAVE_SET_TASK_VOFFSET:
 		context.voffset = op2;
-		if (context.voffset < 0 || context.voffset > cave_max_voffset) {
-			pr_warn("cave: voffset out of range (%ld) comm=%s\n",
-				context.voffset, p->comm);
-			context.voffset = 0;
-		}
 		cave_set_task(p, context);
+		if (context.voffset < 0 || context.voffset > cave_max_voffset)
+			return -EINVAL;
 		/*
 		pr_info("cave: pid %d voffset: %3ld\n",
 		       task_tgid_vnr(p), -p->cave_data.context.voffset);
@@ -1427,5 +1424,5 @@ SYSCALL_DEFINE3(uniserver_ctl, int, action, int, op1, int, op2)
 		}
 	}
 
-	return -1;
+	return -EINVAL;
 }
