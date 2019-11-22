@@ -416,29 +416,6 @@ static void stats_clear(void)
 }
 #endif
 
-#if 0
-static void cave_check_tasks(void)
-{
-	struct task_struct *p;
-
-	read_lock(&tasklist_lock);
-	for_each_process(p) {
-		struct cave_data *c = &p->cave_data;
-		if (p->flags & PF_KTHREAD) {
-			if (c->context.voffset != cave_kernel_voffset)
-				pr_warn("cave: kthread %s with %d voffset\n",
-					p->comm, c->voffset);
-		}
-		else {
-			if (c->context.voffset == cave_kernel_voffset)
-				pr_warn("cave: user thread %s with %d voffset\n",
-					p->comm, c->context.voffset);
-		}
-	}
-	read_unlock(&tasklist_lock);
-}
-#endif
-
 /* Arch specific */
 
 #define TO_VOFFSET_DATA(__val)	(__val ? (0x800ULL - (u64)__val) << 21 : 0ULL)
