@@ -8,16 +8,16 @@ struct cave_context {
 };
 
 typedef struct cave_data {
-	struct cave_context context;
-	struct cave_context active_context;
+	struct cave_context kernel_ctx;
+	struct cave_context user_ctx;
 } cave_data_t;
 
 #define CAVE_DEFAULT_KERNEL_VOFFSET	CONFIG_UNISERVER_CAVE_DEFAULT_KERNEL_VOFFSET
 
 #define INIT_TASK_CAVE							\
 	.cave_data = { \
-		.context = { .voffset = CAVE_DEFAULT_KERNEL_VOFFSET },	\
-		.active_context = { .voffset = CAVE_DEFAULT_KERNEL_VOFFSET } \
+		.kernel_ctx = { .voffset = CAVE_DEFAULT_KERNEL_VOFFSET },	\
+		.user_ctx = { .voffset = CAVE_DEFAULT_KERNEL_VOFFSET } \
 	},
 
 #else

@@ -660,27 +660,34 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 	if (test_bit(syscall_nr, syscall_enabled))
 		syscall_entry_context = CAVE_SYSCALL_CONTEXT;
 
+	current->cave_data.kernel_ctx = syscall_entry_context;
 	_cave_switch(syscall_entry_context, ENTRY_SYSCALL);
 }
 
 __visible void cave_entry_switch(void)
 {
+	current->cave_data.kernel_ctx = CAVE_KERNEL_CONTEXT;
 	_cave_switch(CAVE_KERNEL_CONTEXT, ENTRY);
 }
 
+/*
+   No need to restore kernel_ctx on exit paths, next entry will handle it.
+   kernel threads do not exit to user-space.
+*/
+
 __visible void cave_exit_switch(void)
 {
-	_cave_switch(current->cave_data.context, EXIT);
+	_cave_switch(current->cave_data.user_ctx, EXIT);
 }
 
 __visible void cave_syscall_exit_switch(void)
 {
-	_cave_switch(current->cave_data.context, EXIT_SYSCALL);
+	_cave_switch(current->cave_data.user_ctx, EXIT_SYSCALL);
 }
 
-static void cave_set_task(struct task_struct *p, struct cave_context context)
+static void cave_set_user_context(struct task_struct *p, struct cave_context context)
 {
-	p->cave_data.context = context;
+	p->cave_data.user_ctx = context;
 }
 
 /* should be protected by tasklist_lock */
@@ -688,7 +695,7 @@ void cave_copy_task(struct task_struct *p, struct task_struct *parent)
 {
 	struct cave_context context;
 
-	context.voffset = parent->cave_data.context.voffset;
+	context = parent->cave_data.user_ctx;
 
 	if (context.voffset < 0 || context.voffset > cave_max_voffset)
 		pr_warn("cave: pid %d comm=%s with no vmin",
@@ -697,25 +704,28 @@ void cave_copy_task(struct task_struct *p, struct task_struct *parent)
 	if (cave_random_vmin_enabled && !(p->flags & PF_KTHREAD))
 		context.voffset = get_random_long() % cave_max_voffset;
 
-	cave_set_task(p, context);
+	cave_set_user_context(p, context);
 }
 
 void cave_context_switch_voltage(struct task_struct *prev, struct task_struct *next)
 {
-	struct cave_context restore_context = this_cpu_read(context);
-
-	prev->cave_data.active_context = restore_context;
-	trace_printk("cave: cs: voffset: %ld --> %ld\n",
-		     next->cave_data.active_context.voffset, restore_context.voffset);
-	barrier();
-	_cave_switch(next->cave_data.active_context, CONTEXT_SWITCH);
+	trace_printk("%s --> %s, %ld --> %ld\n",
+		     prev->comm, next->comm,
+		     prev->cave_data.kernel_ctx.voffset,
+		     next->cave_data.kernel_ctx.voffset);
+	/*
+	   Context switch takes place in kernel mode,
+	   if an exit to user mode follows then we switch voltage again on the
+	   exit path.
+	 */
+	_cave_switch(next->cave_data.kernel_ctx, CONTEXT_SWITCH);
 }
 
 void cave_init_userspace(void)
 {
 	struct task_struct *p = current;
 
-	p->cave_data.context = CAVE_USERSPACE_CONTEXT;
+	cave_set_user_context(p, CAVE_USERSPACE_CONTEXT);
 }
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
@@ -1003,10 +1013,10 @@ ssize_t kernel_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 
 	write_lock_irq(&tasklist_lock);
 	for_each_possible_cpu(i)
-		idle_task(i)->cave_data.context = CAVE_KERNEL_CONTEXT;
+		idle_task(i)->cave_data.kernel_ctx = CAVE_KERNEL_CONTEXT;
 	for_each_process_thread(g, p)
 		if (p->flags & PF_KTHREAD)
-			p->cave_data.context = CAVE_KERNEL_CONTEXT;
+			p->cave_data.kernel_ctx = CAVE_KERNEL_CONTEXT;
 	write_unlock_irq(&tasklist_lock);
  out:
 	cave_unlock(flags);
@@ -1097,7 +1107,7 @@ ssize_t userspace_voffset_store(struct kobject *kobj, struct kobj_attribute *att
 	write_lock_irq(&tasklist_lock);
 	for_each_process_thread(g, p)
 		if (!(p->flags & PF_KTHREAD))
-			p->cave_data.context = CAVE_USERSPACE_CONTEXT;
+			cave_set_user_context(p, CAVE_USERSPACE_CONTEXT);
 	write_unlock_irq(&tasklist_lock);
  out:
 	cave_unlock(flags);
@@ -1404,12 +1414,12 @@ SYSCALL_DEFINE3(uniserver_ctl, int, action, int, op1, int, op2)
 	switch (action) {
 	case CAVE_SET_TASK_VOFFSET:
 		context.voffset = op2;
-		cave_set_task(p, context);
 		if (context.voffset < 0 || context.voffset > cave_max_voffset)
 			return -EINVAL;
+		cave_set_user_context(p, context);
 		/*
 		pr_info("cave: pid %d voffset: %3ld\n",
-		       task_tgid_vnr(p), -p->cave_data.context.voffset);
+		       task_tgid_vnr(p), -p->cave_data.user_ctx.voffset);
 		*/
 		return 0;
 	case CAVE_LOOP:
