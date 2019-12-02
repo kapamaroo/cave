@@ -12,12 +12,13 @@ typedef struct cave_data {
 	struct cave_context user_ctx;
 } cave_data_t;
 
+#define CAVE_NOMINAL_VOFFSET	0
 #define CAVE_DEFAULT_KERNEL_VOFFSET	CONFIG_UNISERVER_CAVE_DEFAULT_KERNEL_VOFFSET
 
 #define INIT_TASK_CAVE							\
-	.cave_data = { \
-		.kernel_ctx = { .voffset = CAVE_DEFAULT_KERNEL_VOFFSET },	\
-		.user_ctx = { .voffset = CAVE_DEFAULT_KERNEL_VOFFSET } \
+	.cave_data = {							\
+		.kernel_ctx = { .voffset = CAVE_NOMINAL_VOFFSET },	\
+		.user_ctx = { .voffset = CAVE_NOMINAL_VOFFSET }		\
 	},
 
 #else
