@@ -62,6 +62,7 @@
 #include <linux/oom.h>
 #include <linux/compat.h>
 #include <linux/vmalloc.h>
+#include <linux/cave_api.h>
 
 #include <linux/uaccess.h>
 #include <asm/mmu_context.h>
@@ -1764,6 +1765,8 @@ static int do_execveat_common(int fd, struct filename *filename,
 		goto out;
 
 	would_dump(bprm, bprm->file);
+
+	cave_exec_task(current);
 
 	retval = exec_binprm(bprm);
 	if (retval < 0)

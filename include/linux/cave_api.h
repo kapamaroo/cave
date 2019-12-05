@@ -5,16 +5,11 @@ struct task_struct;
 
 #ifdef CONFIG_UNISERVER_CAVE
 
-void cave_copy_task(struct task_struct *p, struct task_struct *parent);
-void cave_init_userspace(void);
+void cave_exec_task(struct task_struct *p);
 void cave_context_switch_voltage(struct task_struct *prev, struct task_struct *next);
 
 #else
-static void cave_copy_task(task_struct *p, struct task_struct *parent)
-{
-}
-
-static void cave_init_userspace(void)
+void cave_exec_task(struct task_struct *p)
 {
 }
 

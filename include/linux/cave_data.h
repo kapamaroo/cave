@@ -10,6 +10,7 @@ struct cave_context {
 typedef struct cave_data {
 	struct cave_context kernel_ctx;
 	struct cave_context user_ctx;
+	bool skip_default_user_context;
 } cave_data_t;
 
 #define CAVE_NOMINAL_VOFFSET	0
@@ -18,7 +19,8 @@ typedef struct cave_data {
 #define INIT_TASK_CAVE							\
 	.cave_data = {							\
 		.kernel_ctx = { .voffset = CAVE_NOMINAL_VOFFSET },	\
-		.user_ctx = { .voffset = CAVE_NOMINAL_VOFFSET }		\
+		.user_ctx = { .voffset = CAVE_NOMINAL_VOFFSET },	\
+		.skip_default_user_context = false			\
 	},
 
 #else

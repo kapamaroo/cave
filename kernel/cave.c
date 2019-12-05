@@ -679,35 +679,62 @@ __visible void cave_syscall_exit_switch(void)
 	_cave_switch(current->cave_data.user_ctx, EXIT_SYSCALL);
 }
 
-static void cave_set_user_context(struct task_struct *p, struct cave_context context)
-{
-	p->cave_data.user_ctx = context;
-}
-
-/* should be protected by tasklist_lock */
-void cave_copy_task(struct task_struct *p, struct task_struct *parent)
+static struct cave_context default_user_context_no_lock(void)
 {
 	struct cave_context context;
 
-	if (p->flags & PF_KTHREAD)
-		context = CAVE_CONTEXT(cave_userspace_voffset);
-	else
-		context = parent->cave_data.user_ctx;
+	context = CAVE_CONTEXT(cave_userspace_voffset);
 
-	if (context.voffset < 0 || context.voffset > cave_max_voffset)
-		pr_warn("cave: pid %d comm=%s with no vmin",
-			task_tgid_vnr(parent), parent->comm);
-
-	if (cave_random_vmin_enabled && !(p->flags & PF_KTHREAD))
+	if (cave_random_vmin_enabled)
 		context.voffset = get_random_long() % cave_max_voffset;
 
-	cave_set_user_context(p, context);
+	return context;
+}
+
+static struct cave_context default_user_context(void)
+{
+	unsigned long flags;
+	struct cave_context context;
+
+	/* protected by cave_lock to avoid races with new voffset values */
+	cave_lock(flags);
+	context = CAVE_CONTEXT(cave_userspace_voffset);
+	cave_unlock(flags);
+
+	if (cave_random_vmin_enabled)
+		context.voffset = get_random_long() % cave_max_voffset;
+
+	return context;
+}
+
+/*
+ * The current task may be either a kernel or a user task.
+ *
+ *	               exec()
+ *	   user task    -->    user task
+ *	   kernel task  -->    user task
+ *
+ * Kernel threads do not care about user context.
+ * As exec() converts a kernel task to a user task, we need
+ * to set user context accordingly.
+ *
+ * see fs/exec.c for more details about do_execveat_common()
+ */
+void cave_exec_task(struct task_struct *p)
+{
+	if (p->flags & PF_KTHREAD) {
+		p->cave_data.user_ctx = default_user_context();
+		p->cave_data.skip_default_user_context = false;
+	}
 }
 
 void cave_context_switch_voltage(struct task_struct *prev, struct task_struct *next)
 {
 	struct cave_context prev_ctx = prev->cave_data.kernel_ctx;
 	struct cave_context next_ctx = next->cave_data.kernel_ctx;
+
+	if (!cave_enabled)
+		return;
 
 	/*
 	  Context switch takes place in kernel mode
@@ -728,32 +755,28 @@ void cave_context_switch_voltage(struct task_struct *prev, struct task_struct *n
 	}
 }
 
-void cave_init_userspace(void)
-{
-#ifdef CONFIG_UNISERVER_CAVE_USERSPACE
-	struct task_struct *p = current;
-
-	cave_set_user_context(p, CAVE_CONTEXT(cave_userspace_voffset));
-#endif
-}
-
-static void cave_apply_tasks(bool kernel, bool user)
+/* protected by cave_lock to avoid races with new voffset values */
+static void cave_apply_tasks(void)
 {
 	int i;
 	struct task_struct *g, *p;
 
-	write_lock_irq(&tasklist_lock);
 	for_each_possible_cpu(i)
 		idle_task(i)->cave_data.kernel_ctx = CAVE_CONTEXT(cave_kernel_voffset);
 	for_each_process_thread(g, p) {
-		if (kernel && p->flags & PF_KTHREAD)
-			p->cave_data.kernel_ctx = CAVE_CONTEXT(cave_kernel_voffset);
+		p->cave_data.kernel_ctx = CAVE_CONTEXT(cave_kernel_voffset);
 #ifdef CONFIG_UNISERVER_CAVE_USERSPACE
-		if (user && !(p->flags & PF_KTHREAD))
-			cave_set_user_context(p, CAVE_CONTEXT(cave_userspace_voffset));
+		if (!(p->flags & PF_KTHREAD)) {
+			if (!p->cave_data.skip_default_user_context) {
+				p->cave_data.user_ctx = default_user_context_no_lock();
+			}
+			else {
+				if (p->cave_data.user_ctx.voffset != cave_userspace_voffset)
+					pr_info("cave: %s keep voffset=%ld", p->comm, p->cave_data.user_ctx.voffset);
+			}
+		}
 #endif
 	}
-	write_unlock_irq(&tasklist_lock);
 }
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
@@ -895,7 +918,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 		cave_lock(flags);
 		if (!cave_enabled) {
 			write_voffset(CAVE_NOMINAL_VOFFSET);
-			cave_apply_tasks(true, true);
+			cave_apply_tasks();
 			stats_init();
 			// bitmap_fill(syscall_enabled, __NR_syscall_max);
 			cave_enabled = 1;
@@ -1417,18 +1440,17 @@ late_initcall(cave_init);
 SYSCALL_DEFINE3(uniserver_ctl, int, action, int, op1, int, op2)
 {
 	struct task_struct *p = current;
-	struct cave_context context;
+	long voffset;
 
 	switch (action) {
 	case CAVE_SET_TASK_VOFFSET:
-		context.voffset = op2;
-		if (context.voffset < 0 || context.voffset > cave_max_voffset)
+		voffset = op2;
+		if (voffset < 0 || voffset > cave_max_voffset)
 			return -EINVAL;
-		cave_set_user_context(p, context);
-		/*
-		pr_info("cave: pid %d voffset: %3ld\n",
-		       task_tgid_vnr(p), -p->cave_data.user_ctx.voffset);
-		*/
+
+		p->cave_data.user_ctx = CAVE_CONTEXT(voffset);
+		p->cave_data.skip_default_user_context = true;
+
 		return 0;
 	case CAVE_LOOP:
 		{

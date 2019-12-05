@@ -87,7 +87,6 @@
 #include <linux/compiler.h>
 #include <linux/sysctl.h>
 #include <linux/kcov.h>
-#include <linux/cave_api.h>
 
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
@@ -1865,7 +1864,6 @@ static __latent_entropy struct task_struct *copy_process(
 	total_forks++;
 	spin_unlock(&current->sighand->siglock);
 	syscall_tracepoint_update(p);
-	cave_copy_task(p, current);
 	write_unlock_irq(&tasklist_lock);
 
 	proc_fork_connector(p);

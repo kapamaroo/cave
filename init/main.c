@@ -88,7 +88,6 @@
 #include <linux/io.h>
 #include <linux/cache.h>
 #include <linux/rodata_test.h>
-#include <linux/cave_api.h>
 
 #include <asm/io.h>
 #include <asm/bugs.h>
@@ -966,8 +965,6 @@ static int __ref kernel_init(void *unused)
 	numa_default_policy();
 
 	rcu_end_inkernel_boot();
-
-	cave_init_userspace();
 
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
