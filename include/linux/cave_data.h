@@ -14,7 +14,6 @@ typedef struct cave_data {
 } cave_data_t;
 
 #define CAVE_NOMINAL_VOFFSET	0
-#define CAVE_DEFAULT_KERNEL_VOFFSET	CONFIG_UNISERVER_CAVE_DEFAULT_KERNEL_VOFFSET
 
 #define INIT_TASK_CAVE							\
 	.cave_data = {							\

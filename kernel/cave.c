@@ -263,14 +263,13 @@ static DEFINE_SPINLOCK(cave_lock);
 #define cave_unlock(flags)	spin_unlock_irqrestore(&cave_lock, flags)
 
 static volatile int cave_max_voffset __read_mostly = 400;
-static volatile int cave_kernel_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
-static volatile int cave_syscall_voffset __read_mostly = CAVE_DEFAULT_KERNEL_VOFFSET;
+static volatile int cave_kernel_voffset __read_mostly = CAVE_NOMINAL_VOFFSET;
+static volatile int cave_syscall_voffset __read_mostly = CAVE_NOMINAL_VOFFSET;
 
 #define CAVE_CONTEXT(__v)	((struct cave_context){ .voffset = __v })
 
 #ifdef CONFIG_UNISERVER_CAVE_USERSPACE
-#define CAVE_DEFAULT_USERSPACE_VOFFSET	CONFIG_UNISERVER_CAVE_DEFAULT_USERSPACE_VOFFSET
-static volatile int cave_userspace_voffset __read_mostly = CAVE_DEFAULT_USERSPACE_VOFFSET;
+static volatile int cave_userspace_voffset __read_mostly = CAVE_NOMINAL_VOFFSET;
 #endif
 
 DEFINE_PER_CPU(struct cave_context, context) = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);

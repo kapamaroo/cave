@@ -14,14 +14,4 @@ config UNISERVER_CAVE_USERSPACE
        default n
        depends on UNISERVER_CAVE
 
-config UNISERVER_CAVE_DEFAULT_KERNEL_VOFFSET
-       int "Default CAVE kernel voffset"
-       default "225"
-       depends on UNISERVER_CAVE
-
-config UNISERVER_CAVE_DEFAULT_USERSPACE_VOFFSET
-       int "Default CAVE userspace voffset"
-       default "225"
-       depends on UNISERVER_CAVE_USERSPACE
-
 endmenu
