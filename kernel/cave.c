@@ -93,11 +93,26 @@ static int remove_elem(struct elem *element, int num, int cpu)
 	return num;
 }
 
-static unsigned long long log_voltage(void)
+#if 0
+static void trace_avg_voltage(struct elem new)
 {
 	const int MAX = 1000;
 	static int sample = 0;
 	static int avg = 0;
+
+	avg += new.voltage;
+	if (++sample == MAX) {
+		trace_printk("cave: cpu%d voltage=%u voffset=%u avg=%d\n",
+			     smp_processor_id(), new.voltage, new.voffset, avg / MAX);
+		sample = 0;
+		avg = 0;
+	}
+	barrier();
+}
+#endif
+
+static unsigned long long log_voltage(void)
+{
 	struct elem new;
 
 	if (!cave_enabled)
@@ -113,14 +128,7 @@ static unsigned long long log_voltage(void)
 #undef TO_VOFFSET_VAL
 
 	add_elem(new);
-	avg += new.voltage;
-	if (++sample == MAX) {
-		trace_printk("cave: cpu%d voltage=%u voffset=%u avg=%d\n",
-			     smp_processor_id(), new.voltage, new.voffset, avg / MAX);
-		sample = 0;
-		avg = 0;
-	}
-	barrier();
+	// trace_avg_voltage(new);
 
 	return new.time;
 }
@@ -747,9 +755,11 @@ void cave_context_switch_voltage(struct task_struct *prev, struct task_struct *n
 	  irq from kernel, syscall slowpath.
 	*/
 	if (prev_ctx.voffset != next_ctx.voffset) {
+		/*
 		trace_printk("%ld --> %ld, %s --> %s\n",
 			     prev_ctx.voffset, next_ctx.voffset,
 			     prev->comm, next->comm);
+		*/
 		_cave_switch(next_ctx, CONTEXT_SWITCH);
 	}
 }
