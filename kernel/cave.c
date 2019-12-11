@@ -35,9 +35,21 @@ enum reason {
 	CONTEXT_SWITCH
 };
 
-#define BUF_SZ	(1ULL << 21)
+#define BUF_SZ	(1ULL << 24)
 DEFINE_PER_CPU(struct log, voltage_log);
 DEFINE_PER_CPU(unsigned long, syscall_num);
+
+static void reset_log(void)
+{
+	int i;
+
+	for_each_possible_cpu(i) {
+		struct log *log = per_cpu_ptr(&voltage_log, i);
+
+		WRITE_ONCE(log->write, 0);
+		WRITE_ONCE(log->read, 0);
+	}
+}
 
 static void init_log(void)
 {
@@ -49,8 +61,8 @@ static void init_log(void)
 		log->buf = vmalloc(BUF_SZ);
 		if (!log->buf)
 			pr_warn("cave: no mem\n");
-		log->write = 0;
-		log->read = 0;
+		WRITE_ONCE(log->write, 0);
+		WRITE_ONCE(log->read, 0);
 	}
 }
 
@@ -82,8 +94,9 @@ static int remove_elem(struct elem *element, int num, int cpu)
 {
 	struct log *log = per_cpu_ptr(&voltage_log, cpu);
 	int read = READ_ONCE(log->read);
+	int write = READ_ONCE(log->write);
 
-	num = min_t(int, num, log->write - read);
+	num = min_t(int, num, write - read);
 	if (num) {
 		memcpy(element, log->buf + read, num * sizeof(struct elem));
 		smp_store_release(&log->read, read + num);
@@ -919,6 +932,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 	if (enable) {
 		cave_lock(flags);
 		if (!cave_enabled) {
+			reset_log();
 			write_voffset(CAVE_NOMINAL_VOFFSET);
 			cave_apply_tasks();
 			stats_init();
