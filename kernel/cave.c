@@ -18,8 +18,7 @@ static volatile int cave_enabled = 0;
 
 struct elem {
 	u64 time;
-	u32 voltage;
-	u32 voffset;
+	u64 voltage;
 };
 
 struct log {
@@ -102,8 +101,8 @@ static void trace_avg_voltage(struct elem new)
 
 	avg += new.voltage;
 	if (++sample == MAX) {
-		trace_printk("cave: cpu%d voltage=%u voffset=%u avg=%d\n",
-			     smp_processor_id(), new.voltage, new.voffset, avg / MAX);
+		trace_printk("cave: cpu%d voltage=%u avg=%d\n",
+			     smp_processor_id(), new.voltage, avg / MAX);
 		sample = 0;
 		avg = 0;
 	}
@@ -120,12 +119,6 @@ static unsigned long long log_voltage(void)
 
 	new.time = rdtsc();
 	new.voltage = read_voltage();
-
-	wrmsrl(0x150, 0x8000001000000000);
-	rdmsrl(0x150, new.voffset);
-#define TO_VOFFSET_VAL(__data)    (__data ? (0x800ULL - ((u64)__data >> 21)) : 0ULL)
-	new.voffset =  TO_VOFFSET_VAL(new.voffset);
-#undef TO_VOFFSET_VAL
 
 	add_elem(new);
 	// trace_avg_voltage(new);
@@ -1248,8 +1241,8 @@ ssize_t ctl_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 
 		n = remove_elem(e, limit, cpu);
 		for (i = 0; i < n; i++) {
-			ret += scnprintf(buf + ret, PAGE_SIZE - ret, "cpu%d %llu %u %u\n",
-					 cpu, e[i].time, e[i].voltage, e[i].voffset);
+			ret += scnprintf(buf + ret, PAGE_SIZE - ret, "cpu%d %llu %llu\n",
+					 cpu, e[i].time, e[i].voltage);
 			if (ret >= PAGE_SIZE) {
 				pr_info("cave: max output %d\n", ret);
 				goto out;
