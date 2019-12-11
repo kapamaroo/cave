@@ -16,16 +16,7 @@
 
 static volatile int cave_enabled = 0;
 
-struct elem {
-	u64 time;
-	u64 voltage;
-};
-
-struct log {
-	struct elem *buf;
-	int write;
-	int read;
-};
+DEFINE_PER_CPU(unsigned long, syscall_num);
 
 enum reason {
 	ENTRY = 0,
@@ -34,37 +25,6 @@ enum reason {
 	EXIT_SYSCALL,
 	CONTEXT_SWITCH
 };
-
-#define BUF_SZ	(1ULL << 24)
-DEFINE_PER_CPU(struct log, voltage_log);
-DEFINE_PER_CPU(unsigned long, syscall_num);
-
-static void reset_log(void)
-{
-	int i;
-
-	for_each_possible_cpu(i) {
-		struct log *log = per_cpu_ptr(&voltage_log, i);
-
-		WRITE_ONCE(log->write, 0);
-		WRITE_ONCE(log->read, 0);
-	}
-}
-
-static void init_log(void)
-{
-	int i;
-
-	for_each_possible_cpu(i) {
-		struct log *log = per_cpu_ptr(&voltage_log, i);
-
-		log->buf = vmalloc(BUF_SZ);
-		if (!log->buf)
-			pr_warn("cave: no mem\n");
-		WRITE_ONCE(log->write, 0);
-		WRITE_ONCE(log->read, 0);
-	}
-}
 
 static u64 read_voltage(void)
 {
@@ -76,46 +36,17 @@ static u64 read_voltage(void)
 	return value;
 }
 
-static void add_elem(struct elem new)
-{
-	struct log *log = this_cpu_ptr(&voltage_log);
-	int write = READ_ONCE(log->write);
-
-	if (write < BUF_SZ) {
-		log->buf[write] = new;
-		smp_store_release(&log->write, write + 1);
-		return;
-	}
-
-	WARN_ON_ONCE(1);
-}
-
-static int remove_elem(struct elem *element, int num, int cpu)
-{
-	struct log *log = per_cpu_ptr(&voltage_log, cpu);
-	int read = READ_ONCE(log->read);
-	int write = READ_ONCE(log->write);
-
-	num = min_t(int, num, write - read);
-	if (num) {
-		memcpy(element, log->buf + read, num * sizeof(struct elem));
-		smp_store_release(&log->read, read + num);
-	}
-
-	return num;
-}
-
 #if 0
-static void trace_avg_voltage(struct elem new)
+static void trace_avg_voltage(u64 voltage)
 {
 	const int MAX = 1000;
 	static int sample = 0;
 	static int avg = 0;
 
-	avg += new.voltage;
+	avg += voltage;
 	if (++sample == MAX) {
 		trace_printk("cave: cpu%d voltage=%u avg=%d\n",
-			     smp_processor_id(), new.voltage, avg / MAX);
+			     smp_processor_id(), voltage, avg / MAX);
 		sample = 0;
 		avg = 0;
 	}
@@ -123,20 +54,10 @@ static void trace_avg_voltage(struct elem new)
 }
 #endif
 
-static unsigned long long log_voltage(void)
+static void log_voltage(void)
 {
-	struct elem new;
-
-	if (!cave_enabled)
-		return 0;
-
-	new.time = rdtsc();
-	new.voltage = read_voltage();
-
-	add_elem(new);
-	// trace_avg_voltage(new);
-
-	return new.time;
+	if (cave_enabled)
+		trace_printk("%d %llu", smp_processor_id(), read_voltage());
 }
 
 enum cave_switch_case {
@@ -191,18 +112,14 @@ static inline unsigned long long start_measure(const enum reason reason)
 {
 	unsigned long long ret;
 
-#if 1
 	if (reason == EXIT_SYSCALL) {
 		unsigned long syscall_nr = this_cpu_read(syscall_num);
 
 		if (test_bit(syscall_nr, syscall_enabled))
-			ret = log_voltage();
-		else
-			ret = rdtsc();
+			log_voltage();
 	}
-	else
-#endif
-		ret = rdtsc();
+
+	ret = rdtsc();
 
 	return ret;
 }
@@ -932,7 +849,6 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 	if (enable) {
 		cave_lock(flags);
 		if (!cave_enabled) {
-			reset_log();
 			write_voffset(CAVE_NOMINAL_VOFFSET);
 			cave_apply_tasks();
 			stats_init();
@@ -1236,36 +1152,15 @@ ssize_t ctl_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	static char *s = (void *)-1;
 	int ret = 0;
-	int cpu;
-	struct elem *e;
 
 	if (s == (void *)-1)
 		s = kmalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!s)
 		return 0;
-	// bitmap_print_to_pagebuf(false, s, syscall_enabled, __NR_syscall_max);
-	// ret = snprintf(buf, PAGE_SIZE, "cave: syscall bitmap: %s\n", s);
 
-	e = (struct elem *)s;
-	// ret += snprintf(buf + ret, PAGE_SIZE - ret,  "s=[%p,%p], buf=%p\n", s, s + PAGE_SIZE - 1, buf);
-	for_each_online_cpu(cpu) {
-		int i;
-		int n;
-		int limit = PAGE_SIZE / max_t(int, sizeof(struct elem), 32 /* sizeof printed element */);
+	bitmap_print_to_pagebuf(false, s, syscall_enabled, __NR_syscall_max);
+	ret = snprintf(buf, PAGE_SIZE, "cave: syscall bitmap: %s\n", s);
 
-		n = remove_elem(e, limit, cpu);
-		for (i = 0; i < n; i++) {
-			ret += scnprintf(buf + ret, PAGE_SIZE - ret, "cpu%d %llu %llu\n",
-					 cpu, e[i].time, e[i].voltage);
-			if (ret >= PAGE_SIZE) {
-				pr_info("cave: max output %d\n", ret);
-				goto out;
-			}
-		}
-		// cond_resched();
-	}
-
- out:
 	// kfree(s);
 
 	return ret;
@@ -1441,8 +1336,6 @@ int cave_init(void)
 	voffset = read_voffset_msr();
 	write_voffset(CAVE_NOMINAL_VOFFSET);
 	cave_unlock(flags);
-
-	init_log();
 
 	pr_info("cave: msr offset: %ld\n", -voffset);
 
