@@ -14,4 +14,9 @@ config UNISERVER_CAVE_USERSPACE
        default n
        depends on UNISERVER_CAVE
 
+config CAVE_UNISERVER_MSR_VOLTAGE
+       bool "Measure voltage from MSR, print to trace_printk()."
+       default n
+       depends on UNISERVER_CAVE
+
 endmenu

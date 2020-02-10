@@ -18,6 +18,8 @@ static volatile int cave_enabled = 0;
 
 DEFINE_PER_CPU(unsigned long, syscall_num);
 
+#define CONFIG_UNISERVER_CAVE_MSR_VOLTAGE	1
+
 enum reason {
 	ENTRY = 0,
 	EXIT,
@@ -26,6 +28,7 @@ enum reason {
 	CONTEXT_SWITCH
 };
 
+#ifdef CONFIG_UNISERVER_CAVE_MSR_VOLTAGE
 static u64 read_voltage(void)
 {
 	u64 value;
@@ -59,6 +62,7 @@ static void log_voltage(void)
 	if (cave_enabled)
 		trace_printk("%d %llu", smp_processor_id(), read_voltage());
 }
+#endif
 
 enum cave_switch_case {
 	CAVE_INC = 0,
@@ -112,12 +116,14 @@ static inline unsigned long long start_measure(const enum reason reason)
 {
 	unsigned long long ret;
 
+#ifdef CONFIG_UNISERVER_CAVE_MSR_VOLTAGE
 	if (reason == EXIT_SYSCALL) {
 		unsigned long syscall_nr = this_cpu_read(syscall_num);
 
 		if (test_bit(syscall_nr, syscall_enabled))
 			log_voltage();
 	}
+#endif
 
 	ret = rdtsc();
 
