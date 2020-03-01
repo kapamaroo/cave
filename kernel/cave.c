@@ -971,10 +971,12 @@ ssize_t max_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 
 	cave_lock(flags);
 	if (voffset < cave_kernel_voffset)
-		pr_warn("cave: new value of max_voffset greater than kernel voffset\n");
+		pr_warn("cave: new value of max_voffset less than kernel voffset\n");
+	else if (voffset < cave_syscall_voffset)
+		pr_warn("cave: new value of max_voffset less than syscall voffset\n");
 #ifdef CONFIG_UNISERVER_CAVE_USERSPACE
 	else if (voffset < cave_userspace_voffset)
-		pr_warn("cave: new value of max_voffset greater than userspace voffset\n");
+		pr_warn("cave: new value of max_voffset less than userspace voffset\n");
 #endif
 	else
 		cave_max_voffset = voffset;
