@@ -15,6 +15,7 @@
 #include <generated/asm-offsets.h>
 
 static volatile int cave_enabled = 0;
+static volatile int cave_syscall_voffset_enabled = 0;
 
 #define CONFIG_UNISERVER_CAVE_MSR_VOLTAGE	1
 
@@ -588,7 +589,7 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 #ifdef CONFIG_UNISERVER_CAVE_MSR_VOLTAGE
 	this_cpu_write(syscall_num, syscall_nr);
 #endif
-	if (test_bit(syscall_nr, syscall_enabled))
+	if (cave_syscall_voffset_enabled && test_bit(syscall_nr, syscall_enabled))
 		syscall_entry_context = CAVE_CONTEXT(cave_syscall_voffset);
 	else
 		syscall_entry_context = CAVE_CONTEXT(cave_kernel_voffset);
@@ -892,6 +893,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 		cave_lock(flags);
 		if (cave_enabled) {
 			cave_enabled = 0;
+			cave_syscall_context_enabled = 0;
 			// bitmap_zero(syscall_enabled, __NR_syscall_max);
 			stats_clear();
 			/* in case we race with a CPU on the decrease path,
@@ -980,6 +982,41 @@ ssize_t max_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 #endif
 	else
 		cave_max_voffset = voffset;
+	cave_unlock(flags);
+	return count;
+}
+
+static
+ssize_t enable_syscall_voffset_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	int ret = 0;
+
+	ret += sprintf(buf, "%d\n", cave_syscall_voffset_enabled);
+
+	return ret;
+}
+
+static
+ssize_t enable_syscall_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
+				     const char *buf, size_t count)
+{
+	unsigned long flags;
+	int enable;
+	int err;
+
+	err = kstrtouint(buf, 10, &enable);
+	if (err || (enable != 0 && enable != 1)) {
+		pr_warn("cave: invalid %s value\n", attr->attr.name);
+		return count;
+	}
+
+	cave_lock(flags);
+	if (cave_enabled)
+		pr_warn("cave: must be disabled to enable / disable syscall voffset\n");
+	else if (cave_syscall_voffset_enabled != enable) {
+		cave_syscall_voffset_enabled = enable;
+		pr_info("cave: %s syscall voffset\n", enable ? "enable" : "disable");
+	}
 	cave_unlock(flags);
 	return count;
 }
@@ -1246,6 +1283,7 @@ ssize_t ctl_store(struct kobject *kobj, struct kobj_attribute *attr,
 }
 
 KERNEL_ATTR_RW(enable);
+KERNEL_ATTR_RW(enable_syscall_voffset);
 KERNEL_ATTR_RO(stats);
 KERNEL_ATTR_WO(reset_stats);
 KERNEL_ATTR_RO(voltage);
@@ -1313,6 +1351,7 @@ static struct attribute_group syscall_enabled_attr_group = {
 static struct attribute_group attr_group = {
 	.attrs = (struct attribute * []) {
 		&enable_attr.attr,
+		&enable_syscall_voffset_attr.attr,
 		&reset_stats_attr.attr,
 		&stats_attr.attr,
 		&voltage_attr.attr,
