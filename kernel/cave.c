@@ -16,8 +16,6 @@
 
 static volatile int cave_enabled = 0;
 
-DEFINE_PER_CPU(unsigned long, syscall_num);
-
 #define CONFIG_UNISERVER_CAVE_MSR_VOLTAGE	1
 
 enum reason {
@@ -29,6 +27,8 @@ enum reason {
 };
 
 #ifdef CONFIG_UNISERVER_CAVE_MSR_VOLTAGE
+DEFINE_PER_CPU(unsigned long, syscall_num);
+
 static u64 read_voltage(void)
 {
 	u64 value;
@@ -585,7 +585,9 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 {
 	struct cave_context syscall_entry_context = CAVE_CONTEXT(cave_kernel_voffset);
 
+#ifdef CONFIG_UNISERVER_CAVE_MSR_VOLTAGE
 	this_cpu_write(syscall_num, syscall_nr);
+#endif
 	if (test_bit(syscall_nr, syscall_enabled))
 		syscall_entry_context = CAVE_CONTEXT(cave_syscall_voffset);
 
