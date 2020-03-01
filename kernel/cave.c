@@ -717,6 +717,10 @@ static void cave_apply_tasks(void)
 	int i;
 	struct task_struct *g, *p;
 
+	/* Idle tasks do not run on user mode, i.e. they don't enter kernel
+	 * through entry points, but from schedule() context_switch().
+	 * Therefore it is safe to set kernel_ctx for them here.
+	 */
 	for_each_possible_cpu(i)
 		idle_task(i)->cave_data.kernel_ctx = CAVE_CONTEXT(cave_kernel_voffset);
 	for_each_process_thread(g, p) {
