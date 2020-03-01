@@ -583,13 +583,15 @@ static inline void _cave_switch(struct cave_context new_context, const enum reas
 
 __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 {
-	struct cave_context syscall_entry_context = CAVE_CONTEXT(cave_kernel_voffset);
+	struct cave_context syscall_entry_context;
 
 #ifdef CONFIG_UNISERVER_CAVE_MSR_VOLTAGE
 	this_cpu_write(syscall_num, syscall_nr);
 #endif
 	if (test_bit(syscall_nr, syscall_enabled))
 		syscall_entry_context = CAVE_CONTEXT(cave_syscall_voffset);
+	else
+		syscall_entry_context = CAVE_CONTEXT(cave_kernel_voffset);
 
 	current->cave_data.kernel_ctx = syscall_entry_context;
 	_cave_switch(syscall_entry_context, ENTRY_SYSCALL);
@@ -609,12 +611,26 @@ __visible void cave_entry_switch(void)
 
 __visible void cave_exit_switch(void)
 {
-	_cave_switch(current->cave_data.user_ctx, EXIT);
+	struct cave_context context;
+
+	if (!current->cave_data.skip_default_user_context)
+		context = CAVE_CONTEXT(cave_userspace_voffset);
+	else
+		context = current->cave_data.user_ctx;
+
+	_cave_switch(context, EXIT);
 }
 
 __visible void cave_syscall_exit_switch(void)
 {
-	_cave_switch(current->cave_data.user_ctx, EXIT_SYSCALL);
+	struct cave_context context;
+
+	if (!current->cave_data.skip_default_user_context)
+		context = CAVE_CONTEXT(cave_userspace_voffset);
+	else
+		context = current->cave_data.user_ctx;
+
+	_cave_switch(context, EXIT_SYSCALL);
 }
 
 static struct cave_context default_user_context_no_lock(void)
