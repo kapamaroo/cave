@@ -453,10 +453,13 @@ static long select_voffset(void)
 	return new_voffset;
 }
 
-static inline void _cave_switch(struct cave_context new_context, const enum reason reason)
+static inline void _cave_switch(const struct cave_context *next_ctx,
+				const struct cave_context *prev_ctx,
+				struct cave_context *save_ctx,
+				const enum reason reason)
 {
 	unsigned long flags;
-	long new_voffset = new_context.voffset;
+	long new_voffset;
 	long target_voffset;
 	long updated_voffset;
 	long selected_voffset;
@@ -466,38 +469,22 @@ static inline void _cave_switch(struct cave_context new_context, const enum reas
 	unsigned long long start;
 #endif
 
-	/* Fast path: check cave_enable outside of the cave_lock.
-	 * It also covers the increase path if the system is subject to
-	 * undervolting only.
-	 */
-	if (!cave_enabled)
-		return;
-
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 	start = start_measure(reason);
 #endif
 
 	cave_lock(flags, LOCK_INC, start);
 
-	if (!cave_enabled) {
+	if (!cave_enabled || next_ctx->voffset == prev_ctx->voffset) {
 		cave_unlock(flags);
 		return;
 	}
 
-	this_cpu_write(context, new_context);
+	this_cpu_write(context, *next_ctx);
 	target_voffset = read_target_voffset();
-
-	/* We may try to increase voltage just after cave is disabled,
-	 * see cave_enabled comment above.
-	 * It is safe to enter the increase path as soon as we undervolt only,
-	 * if cave is disabled then target_voffset is nominal (lowest possible)
-	 * and we skip the increase path.
-	 */
-
-	/* It is cleaner to just check cave_enabled in the cave_lock but prefer
-	 * this detection method of cave disable as it has less overhead for the
-	 * common case.
-	 */
+	new_voffset = next_ctx->voffset;
+	if (save_ctx)
+		*save_ctx = *next_ctx;
 
 	/* increase voltage immediately */
 	if (new_voffset < target_voffset) {
@@ -586,6 +573,9 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 {
 	struct cave_context syscall_entry_context;
 
+	if (!cave_enabled)
+		return;
+
 #ifdef CONFIG_UNISERVER_CAVE_MSR_VOLTAGE
 	this_cpu_write(syscall_num, syscall_nr);
 #endif
@@ -594,15 +584,20 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 	else
 		syscall_entry_context = CAVE_CONTEXT(cave_kernel_voffset);
 
-	current->cave_data.kernel_ctx = syscall_entry_context;
-	_cave_switch(syscall_entry_context, ENTRY_SYSCALL);
+	_cave_switch(&syscall_entry_context, &current->cave_data.user_ctx,
+		     &current->cave_data.kernel_ctx, ENTRY_SYSCALL);
 }
 
 __visible void cave_entry_switch(void)
 {
-	struct cave_context context = CAVE_CONTEXT(cave_kernel_voffset);
-	current->cave_data.kernel_ctx = context;
-	_cave_switch(context, ENTRY);
+	struct cave_context context;
+
+	if (!cave_enabled)
+		return;
+
+	context = CAVE_CONTEXT(cave_kernel_voffset);
+	_cave_switch(&context, &current->cave_data.user_ctx,
+		     &current->cave_data.kernel_ctx, ENTRY);
 }
 
 /*
@@ -614,24 +609,30 @@ __visible void cave_exit_switch(void)
 {
 	struct cave_context context;
 
+	if (!cave_enabled)
+		return;
+
 	if (!current->cave_data.skip_default_user_context)
 		context = CAVE_CONTEXT(cave_userspace_voffset);
 	else
 		context = current->cave_data.user_ctx;
 
-	_cave_switch(context, EXIT);
+	_cave_switch(&context, &current->cave_data.kernel_ctx, NULL, EXIT);
 }
 
 __visible void cave_syscall_exit_switch(void)
 {
 	struct cave_context context;
 
+	if (!cave_enabled)
+		return;
+
 	if (!current->cave_data.skip_default_user_context)
 		context = CAVE_CONTEXT(cave_userspace_voffset);
 	else
 		context = current->cave_data.user_ctx;
 
-	_cave_switch(context, EXIT_SYSCALL);
+	_cave_switch(&context, &current->cave_data.kernel_ctx, NULL, EXIT_SYSCALL);
 }
 
 static struct cave_context default_user_context_no_lock(void)
@@ -685,8 +686,8 @@ void cave_exec_task(struct task_struct *p)
 
 void cave_context_switch_voltage(struct task_struct *prev, struct task_struct *next)
 {
-	struct cave_context prev_ctx = prev->cave_data.kernel_ctx;
-	struct cave_context next_ctx = next->cave_data.kernel_ctx;
+	struct cave_context *prev_ctx = &prev->cave_data.kernel_ctx;
+	struct cave_context *next_ctx = &next->cave_data.kernel_ctx;
 
 	if (!cave_enabled)
 		return;
@@ -702,14 +703,8 @@ void cave_context_switch_voltage(struct task_struct *prev, struct task_struct *n
 	  This happens for example, on system calls which may sleep,
 	  irq from kernel, syscall slowpath.
 	*/
-	if (prev_ctx.voffset != next_ctx.voffset) {
-		/*
-		trace_printk("%ld --> %ld, %s --> %s\n",
-			     prev_ctx.voffset, next_ctx.voffset,
-			     prev->comm, next->comm);
-		*/
-		_cave_switch(next_ctx, CONTEXT_SWITCH);
-	}
+
+	_cave_switch(next_ctx, prev_ctx, NULL, CONTEXT_SWITCH);
 }
 
 /* protected by cave_lock to avoid races with new voffset values */
@@ -725,9 +720,11 @@ static void cave_apply_tasks(void)
 	for_each_possible_cpu(i)
 		idle_task(i)->cave_data.kernel_ctx = CAVE_CONTEXT(cave_kernel_voffset);
 	for_each_process_thread(g, p) {
-		p->cave_data.kernel_ctx = CAVE_CONTEXT(cave_kernel_voffset);
-#ifdef CONFIG_UNISERVER_CAVE_USERSPACE
-		if (!(p->flags & PF_KTHREAD)) {
+		if ((p->flags & PF_KTHREAD)) {
+			p->cave_data.kernel_ctx = CAVE_CONTEXT(cave_kernel_voffset);
+		}
+#if 0
+		else {
 			if (!p->cave_data.skip_default_user_context) {
 				p->cave_data.user_ctx = default_user_context_no_lock();
 			}
