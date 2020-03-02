@@ -15,7 +15,7 @@
 #include <generated/asm-offsets.h>
 
 static volatile int cave_enabled = 0;
-static volatile int cave_syscall_voffset_enabled = 0;
+static volatile int cave_syscall_context_enabled = 0;
 
 #define CONFIG_UNISERVER_CAVE_MSR_VOLTAGE	1
 
@@ -200,14 +200,14 @@ static DEFINE_SPINLOCK(cave_lock);
 #define cave_lock(...)	GET_MACRO(__VA_ARGS__, _cave_lock_3, _cave_lock_2, _cave_lock_1, fn0)(__VA_ARGS__)
 #define cave_unlock(flags)	spin_unlock_irqrestore(&cave_lock, flags)
 
-static volatile int cave_max_voffset __read_mostly = 400;
-static volatile int cave_kernel_voffset __read_mostly = CAVE_NOMINAL_VOFFSET;
-static volatile int cave_syscall_voffset __read_mostly = CAVE_NOMINAL_VOFFSET;
-
 #define CAVE_CONTEXT(__v)	((struct cave_context){ .voffset = __v })
 
+static volatile struct cave_context cave_max_context __read_mostly = CAVE_CONTEXT(400);
+static volatile struct cave_context cave_kernel_context __read_mostly = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
+static volatile struct cave_context cave_syscall_context __read_mostly = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
+
 #ifdef CONFIG_UNISERVER_CAVE_USERSPACE
-static volatile int cave_userspace_voffset __read_mostly = CAVE_NOMINAL_VOFFSET;
+static volatile struct cave_context cave_user_context __read_mostly = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
 #endif
 
 DEFINE_PER_CPU(struct cave_context, context) = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
@@ -453,9 +453,9 @@ static long select_voffset(void)
 	return new_voffset;
 }
 
-static inline void _cave_switch(const struct cave_context *next_ctx,
-				const struct cave_context *prev_ctx,
-				struct cave_context *save_ctx,
+static inline void _cave_switch(const volatile struct cave_context *next_ctx,
+				const volatile struct cave_context *prev_ctx,
+				volatile struct cave_context *save_kernel_ctx,
 				const enum reason reason)
 {
 	unsigned long flags;
@@ -475,16 +475,16 @@ static inline void _cave_switch(const struct cave_context *next_ctx,
 
 	cave_lock(flags, LOCK_INC, start);
 
-	if (!cave_enabled || next_ctx->voffset == prev_ctx->voffset) {
+	if (!cave_enabled) {
 		cave_unlock(flags);
 		return;
 	}
 
+	if (save_kernel_ctx)
+		*save_kernel_ctx = *next_ctx;
 	this_cpu_write(context, *next_ctx);
 	target_voffset = read_target_voffset();
 	new_voffset = next_ctx->voffset;
-	if (save_ctx)
-		*save_ctx = *next_ctx;
 
 	/* increase voltage immediately */
 	if (new_voffset < target_voffset) {
@@ -571,7 +571,7 @@ static inline void _cave_switch(const struct cave_context *next_ctx,
 
 __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 {
-	struct cave_context syscall_entry_context;
+	volatile struct cave_context *syscall_entry_context;
 
 	if (!cave_enabled)
 		return;
@@ -579,24 +579,21 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 #ifdef CONFIG_UNISERVER_CAVE_MSR_VOLTAGE
 	this_cpu_write(syscall_num, syscall_nr);
 #endif
-	if (cave_syscall_voffset_enabled && test_bit(syscall_nr, syscall_enabled))
-		syscall_entry_context = CAVE_CONTEXT(cave_syscall_voffset);
+	if (cave_syscall_context_enabled && test_bit(syscall_nr, syscall_enabled))
+		syscall_entry_context = &cave_syscall_context;
 	else
-		syscall_entry_context = CAVE_CONTEXT(cave_kernel_voffset);
+		syscall_entry_context = &cave_kernel_context;
 
-	_cave_switch(&syscall_entry_context, &current->cave_data.user_ctx,
+	_cave_switch(syscall_entry_context, &current->cave_data.user_ctx,
 		     &current->cave_data.kernel_ctx, ENTRY_SYSCALL);
 }
 
 __visible void cave_entry_switch(void)
 {
-	struct cave_context context;
-
 	if (!cave_enabled)
 		return;
 
-	context = CAVE_CONTEXT(cave_kernel_voffset);
-	_cave_switch(&context, &current->cave_data.user_ctx,
+	_cave_switch(&cave_kernel_context, &current->cave_data.user_ctx,
 		     &current->cave_data.kernel_ctx, ENTRY);
 }
 
@@ -607,42 +604,42 @@ __visible void cave_entry_switch(void)
 
 __visible void cave_exit_switch(void)
 {
-	struct cave_context context;
+	volatile struct cave_context *context;
 
 	if (!cave_enabled)
 		return;
 
 	if (!current->cave_data.skip_default_user_context)
-		context = CAVE_CONTEXT(cave_userspace_voffset);
+		context = &cave_user_context;
 	else
-		context = current->cave_data.user_ctx;
+		context = &current->cave_data.user_ctx;
 
-	_cave_switch(&context, &current->cave_data.kernel_ctx, NULL, EXIT);
+	_cave_switch(context, &current->cave_data.kernel_ctx, NULL, EXIT);
 }
 
 __visible void cave_syscall_exit_switch(void)
 {
-	struct cave_context context;
+	volatile struct cave_context *context;
 
 	if (!cave_enabled)
 		return;
 
 	if (!current->cave_data.skip_default_user_context)
-		context = CAVE_CONTEXT(cave_userspace_voffset);
+		context = &cave_user_context;
 	else
-		context = current->cave_data.user_ctx;
+		context = &current->cave_data.user_ctx;
 
-	_cave_switch(&context, &current->cave_data.kernel_ctx, NULL, EXIT_SYSCALL);
+	_cave_switch(context, &current->cave_data.kernel_ctx, NULL, EXIT_SYSCALL);
 }
 
 static struct cave_context default_user_context_no_lock(void)
 {
-	struct cave_context context;
+	volatile struct cave_context context;
 
-	context = CAVE_CONTEXT(cave_userspace_voffset);
+	context = cave_user_context;
 
 	if (cave_random_vmin_enabled)
-		context.voffset = get_random_long() % cave_max_voffset;
+		context.voffset = get_random_long() % cave_max_context.voffset;
 
 	return context;
 }
@@ -654,11 +651,11 @@ static struct cave_context default_user_context(void)
 
 	/* protected by cave_lock to avoid races with new voffset values */
 	cave_lock(flags);
-	context = CAVE_CONTEXT(cave_userspace_voffset);
+	context = cave_user_context;
 	cave_unlock(flags);
 
 	if (cave_random_vmin_enabled)
-		context.voffset = get_random_long() % cave_max_voffset;
+		context.voffset = get_random_long() % cave_max_context.voffset;
 
 	return context;
 }
@@ -684,25 +681,39 @@ void cave_exec_task(struct task_struct *p)
 	}
 }
 
+/*
+ * Context switch takes place in kernel mode
+ * switch voltage again on the user exit path.
+ */
 void cave_context_switch_voltage(struct task_struct *prev, struct task_struct *next)
 {
-	struct cave_context *prev_ctx = &prev->cave_data.kernel_ctx;
-	struct cave_context *next_ctx = &next->cave_data.kernel_ctx;
+	volatile struct cave_context *prev_ctx;
+	volatile struct cave_context *next_ctx;
 
 	if (!cave_enabled)
 		return;
 
 	/*
-	  Context switch takes place in kernel mode
-	  switch voltage again on the user exit path.
+	 * If we have per system call voffsets which are different from the rest
+	 * of the kernel, we need to restore the system call / kernel voffset of
+	 * the next task.
+	 *
+	 * This happens for example, on system calls which may sleep,
+	 * irq from kernel, syscall slowpath.
+	 */
 
-	  If we have per system call voffsets which are different from the rest
-	  of the kernel, we need to restore the system call / kernel voffset of
-	  the next task.
-
-	  This happens for example, on system calls which may sleep,
-	  irq from kernel, syscall slowpath.
-	*/
+	if (prev->flags & PF_KTHREAD && next->flags & PF_KTHREAD) {
+		prev_ctx = &cave_kernel_context;
+		next_ctx = &cave_kernel_context;
+	}
+	else if (prev->flags & PF_KTHREAD) {
+		prev_ctx = &cave_kernel_context;
+		next_ctx = &next->cave_data.kernel_ctx;
+	}
+	else {
+		prev_ctx = &prev->cave_data.kernel_ctx;
+		next_ctx = &cave_kernel_context;
+	}
 
 	_cave_switch(next_ctx, prev_ctx, NULL, CONTEXT_SWITCH);
 }
@@ -718,10 +729,10 @@ static void cave_apply_tasks(void)
 	 * Therefore it is safe to set kernel_ctx for them here.
 	 */
 	for_each_possible_cpu(i)
-		idle_task(i)->cave_data.kernel_ctx = CAVE_CONTEXT(cave_kernel_voffset);
+		idle_task(i)->cave_data.kernel_ctx = cave_kernel_context;
 	for_each_process_thread(g, p) {
 		if ((p->flags & PF_KTHREAD)) {
-			p->cave_data.kernel_ctx = CAVE_CONTEXT(cave_kernel_voffset);
+			p->cave_data.kernel_ctx = cave_kernel_context;
 		}
 #if 0
 		else {
@@ -729,7 +740,7 @@ static void cave_apply_tasks(void)
 				p->cave_data.user_ctx = default_user_context_no_lock();
 			}
 			else {
-				if (p->cave_data.user_ctx.voffset != cave_userspace_voffset)
+				if (p->cave_data.user_ctx.voffset != cave_user_context.voffset)
 					pr_info("cave: %s keep voffset=%ld", p->comm, p->cave_data.user_ctx.voffset);
 			}
 		}
@@ -949,7 +960,7 @@ ssize_t max_voffset_show(struct kobject *kobj, struct kobj_attribute *attr, char
 {
 	int ret = 0;
 
-	ret += sprintf(buf, "%d\n", cave_max_voffset);
+	ret += sprintf(buf, "%ld\n", cave_max_context.voffset);
 
 	return ret;
 }
@@ -969,16 +980,16 @@ ssize_t max_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 	}
 
 	cave_lock(flags);
-	if (voffset < cave_kernel_voffset)
+	if (voffset < cave_kernel_context.voffset)
 		pr_warn("cave: new value of max_voffset less than kernel voffset\n");
-	else if (voffset < cave_syscall_voffset)
+	else if (voffset < cave_syscall_context.voffset)
 		pr_warn("cave: new value of max_voffset less than syscall voffset\n");
 #ifdef CONFIG_UNISERVER_CAVE_USERSPACE
-	else if (voffset < cave_userspace_voffset)
+	else if (voffset < cave_user_context.voffset)
 		pr_warn("cave: new value of max_voffset less than userspace voffset\n");
 #endif
 	else
-		cave_max_voffset = voffset;
+		cave_max_context.voffset = voffset;
 	cave_unlock(flags);
 	return count;
 }
@@ -988,7 +999,7 @@ ssize_t enable_syscall_voffset_show(struct kobject *kobj, struct kobj_attribute 
 {
 	int ret = 0;
 
-	ret += sprintf(buf, "%d\n", cave_syscall_voffset_enabled);
+	ret += sprintf(buf, "%d\n", cave_syscall_context_enabled);
 
 	return ret;
 }
@@ -1010,8 +1021,8 @@ ssize_t enable_syscall_voffset_store(struct kobject *kobj, struct kobj_attribute
 	cave_lock(flags);
 	if (cave_enabled)
 		pr_warn("cave: must be disabled to enable / disable syscall voffset\n");
-	else if (cave_syscall_voffset_enabled != enable) {
-		cave_syscall_voffset_enabled = enable;
+	else if (cave_syscall_context_enabled != enable) {
+		cave_syscall_context_enabled = enable;
 		pr_info("cave: %s syscall voffset\n", enable ? "enable" : "disable");
 	}
 	cave_unlock(flags);
@@ -1023,7 +1034,7 @@ ssize_t kernel_voffset_show(struct kobject *kobj, struct kobj_attribute *attr, c
 {
 	int ret = 0;
 
-	ret += sprintf(buf, "%d\n", cave_kernel_voffset);
+	ret += sprintf(buf, "%ld\n", cave_kernel_context.voffset);
 
 	return ret;
 }
@@ -1042,7 +1053,7 @@ ssize_t kernel_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 		return count;
 	}
 
-	if (voffset > cave_max_voffset) {
+	if (voffset > cave_max_context.voffset) {
 		pr_warn("cave: %s out of range\n", attr->attr.name);
 		return count;
 	}
@@ -1052,7 +1063,7 @@ ssize_t kernel_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 	if (cave_enabled)
 		pr_warn("cave: must be disabled to change kernel voffset\n");
 	else
-		cave_kernel_voffset = voffset;
+		cave_kernel_context.voffset = voffset;
 
 	cave_unlock(flags);
 
@@ -1064,7 +1075,7 @@ ssize_t syscall_voffset_show(struct kobject *kobj, struct kobj_attribute *attr, 
 {
 	int ret = 0;
 
-	ret += sprintf(buf, "%d\n", cave_syscall_voffset);
+	ret += sprintf(buf, "%ld\n", cave_syscall_context.voffset);
 
 	return ret;
 }
@@ -1083,7 +1094,7 @@ ssize_t syscall_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 		return count;
 	}
 
-	if (voffset > cave_max_voffset) {
+	if (voffset > cave_max_context.voffset) {
 		pr_warn("cave: %s out of range\n", attr->attr.name);
 		return count;
 	}
@@ -1093,7 +1104,7 @@ ssize_t syscall_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 	if (cave_enabled)
 		pr_warn("cave: must be disabled to change syscall voffset\n");
 	else
-		cave_syscall_voffset = voffset;
+		cave_syscall_context.voffset = voffset;
 
 	cave_unlock(flags);
 
@@ -1106,7 +1117,7 @@ ssize_t userspace_voffset_show(struct kobject *kobj, struct kobj_attribute *attr
 {
 	int ret = 0;
 
-	ret += sprintf(buf, "%d\n", cave_userspace_voffset);
+	ret += sprintf(buf, "%ld\n", cave_user_context.voffset);
 
 	return ret;
 }
@@ -1125,7 +1136,7 @@ ssize_t userspace_voffset_store(struct kobject *kobj, struct kobj_attribute *att
 		return count;
 	}
 
-	if (voffset > cave_max_voffset) {
+	if (voffset > cave_max_context.voffset) {
 		pr_warn("cave: %s out of range\n", attr->attr.name);
 		return count;
 	}
@@ -1135,7 +1146,7 @@ ssize_t userspace_voffset_store(struct kobject *kobj, struct kobj_attribute *att
 	if (cave_enabled)
 		pr_warn("cave: must be disabled to change userspace voffset\n");
 	else
-		cave_userspace_voffset = voffset;
+		cave_user_context.voffset = voffset;
 
 	cave_unlock(flags);
 
@@ -1420,7 +1431,7 @@ SYSCALL_DEFINE3(uniserver_ctl, int, action, int, op1, int, op2)
 	switch (action) {
 	case CAVE_SET_TASK_VOFFSET:
 		voffset = op2;
-		if (voffset < 0 || voffset > cave_max_voffset)
+		if (voffset < 0 || voffset > cave_max_context.voffset)
 			return -EINVAL;
 
 		p->cave_data.user_ctx = CAVE_CONTEXT(voffset);
