@@ -9,11 +9,6 @@ config UNISERVER_CAVE_STATS
         default n
 	depends on UNISERVER_CAVE
 
-config UNISERVER_CAVE_USERSPACE
-       bool "keep userspace to kernel configuration"
-       default n
-       depends on UNISERVER_CAVE
-
 config UNISERVER_SYSCALL_CONTEXT
        bool "Set voffset per syscall granularity."
        default n

@@ -205,10 +205,7 @@ static DEFINE_SPINLOCK(cave_lock);
 
 static volatile struct cave_context cave_max_context __read_mostly = CAVE_CONTEXT(400);
 static volatile struct cave_context cave_kernel_context __read_mostly = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
-
-#ifdef CONFIG_UNISERVER_CAVE_USERSPACE
 static volatile struct cave_context cave_user_context __read_mostly = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
-#endif
 
 DEFINE_PER_CPU(struct cave_context, context) = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
 
@@ -966,10 +963,8 @@ ssize_t max_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 	else if (voffset < cave_syscall_context.voffset)
 		pr_warn("cave: new value of max_voffset less than syscall voffset\n");
 #endif
-#ifdef CONFIG_UNISERVER_CAVE_USERSPACE
 	else if (voffset < cave_user_context.voffset)
 		pr_warn("cave: new value of max_voffset less than userspace voffset\n");
-#endif
 	else
 		cave_max_context.voffset = voffset;
 	cave_unlock(flags);
@@ -1097,7 +1092,6 @@ ssize_t syscall_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 }
 #endif
 
-#ifdef CONFIG_UNISERVER_CAVE_USERSPACE
 static
 ssize_t userspace_voffset_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -1138,7 +1132,6 @@ ssize_t userspace_voffset_store(struct kobject *kobj, struct kobj_attribute *att
 
 	return count;
 }
-#endif
 
 static
 ssize_t reset_stats_store(struct kobject *kobj, struct kobj_attribute *attr,
@@ -1293,9 +1286,7 @@ KERNEL_ATTR_RW(kernel_voffset);
 KERNEL_ATTR_RW(syscall_voffset);
 KERNEL_ATTR_RW(enable_syscall_voffset);
 #endif
-#ifdef CONFIG_UNISERVER_CAVE_USERSPACE
 KERNEL_ATTR_RW(userspace_voffset);
-#endif
 KERNEL_ATTR_RW(debug);
 KERNEL_ATTR_RW(ctl);
 
@@ -1365,9 +1356,7 @@ static struct attribute_group attr_group = {
 		&syscall_voffset_attr.attr,
 		&enable_syscall_voffset_attr.attr,
 #endif
-#ifdef CONFIG_UNISERVER_CAVE_USERSPACE
 		&userspace_voffset_attr.attr,
-#endif
 		&debug_attr.attr,
 		&ctl_attr.attr,
 		NULL
