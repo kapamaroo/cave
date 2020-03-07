@@ -14,9 +14,14 @@ config UNISERVER_CAVE_USERSPACE
        default n
        depends on UNISERVER_CAVE
 
-config CAVE_UNISERVER_MSR_VOLTAGE
-       bool "Measure voltage from MSR, print to trace_printk()."
+config UNISERVER_SYSCALL_CONTEXT
+       bool "Set voffset per syscall granularity."
        default n
        depends on UNISERVER_CAVE
+
+config UNISERVER_MSR_VOLTAGE
+       bool "Measure voltage from MSR, print to trace_printk()."
+       default n
+       depends on UNISERVER_CAVE_SYSCALL_CONTEXT
 
 endmenu

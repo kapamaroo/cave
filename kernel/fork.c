@@ -87,6 +87,7 @@
 #include <linux/compiler.h>
 #include <linux/sysctl.h>
 #include <linux/kcov.h>
+#include <linux/cave_api.h>
 
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
@@ -1781,6 +1782,8 @@ static __latent_entropy struct task_struct *copy_process(
 	retval = cgroup_can_fork(p);
 	if (retval)
 		goto bad_fork_free_pid;
+
+	cave_fork_init(p);
 
 	/*
 	 * Make it visible to the rest of the system, but dont wake it up yet.

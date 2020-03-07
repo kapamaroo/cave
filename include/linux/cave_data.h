@@ -11,6 +11,7 @@ typedef struct cave_data {
 	struct cave_context kernel_ctx;
 	struct cave_context user_ctx;
 	bool skip_default_user_context;
+	spinlock_t lock;
 } cave_data_t;
 
 #define CAVE_NOMINAL_VOFFSET	0
@@ -19,7 +20,8 @@ typedef struct cave_data {
 	.cave_data = {							\
 		.kernel_ctx = { .voffset = CAVE_NOMINAL_VOFFSET },	\
 		.user_ctx = { .voffset = CAVE_NOMINAL_VOFFSET },	\
-		.skip_default_user_context = false			\
+		.skip_default_user_context = false,			\
+		.lock = __SPIN_LOCK_UNLOCKED(tsk.cave_data.lock)	\
 	},
 
 #else
