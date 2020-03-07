@@ -6,7 +6,6 @@
 #include <linux/seq_file.h>
 #include <linux/kobject.h>
 #include <linux/sysfs.h>
-#include <linux/random.h>
 #include <linux/cave_data.h>
 #include <linux/hrtimer.h>
 #include <linux/slab.h>
@@ -165,7 +164,6 @@ static inline void _end_lock_measure(unsigned long long start, enum cave_lock_ca
 #endif
 
 static struct kobject *cave_kobj;
-static volatile int cave_random_vmin_enabled __read_mostly = 0;
 
 static DEFINE_SPINLOCK(cave_lock);
 
@@ -898,41 +896,6 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 }
 
 static
-ssize_t random_vmin_enable_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
-{
-	int ret = 0;
-
-	ret += sprintf(buf, "%d\n", cave_random_vmin_enabled);
-
-	return ret;
-}
-
-static
-ssize_t random_vmin_enable_store(struct kobject *kobj, struct kobj_attribute *attr,
-				 const char *buf, size_t count)
-{
-	int enable;
-	int err;
-
-	err = kstrtouint(buf, 10, &enable);
-	if (err || (enable != 0 && enable != 1)) {
-		pr_warn("cave: invalid %s value\n", attr->attr.name);
-		return count;
-	}
-
-	if (enable) {
-		if (!cave_random_vmin_enabled)
-			cave_random_vmin_enabled = 1;
-	}
-	else {
-		if (cave_random_vmin_enabled)
-			cave_random_vmin_enabled = 0;
-	}
-
-	return count;
-}
-
-static
 ssize_t max_voffset_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	int ret = 0;
@@ -1279,7 +1242,6 @@ KERNEL_ATTR_RW(enable);
 KERNEL_ATTR_RO(stats);
 KERNEL_ATTR_WO(reset_stats);
 KERNEL_ATTR_RO(voltage);
-KERNEL_ATTR_RW(random_vmin_enable);
 KERNEL_ATTR_RW(max_voffset);
 KERNEL_ATTR_RW(kernel_voffset);
 #ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
@@ -1349,7 +1311,6 @@ static struct attribute_group attr_group = {
 		&reset_stats_attr.attr,
 		&stats_attr.attr,
 		&voltage_attr.attr,
-		&random_vmin_enable_attr.attr,
 		&max_voffset_attr.attr,
 		&kernel_voffset_attr.attr,
 #ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
