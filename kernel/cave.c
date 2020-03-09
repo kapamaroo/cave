@@ -474,11 +474,6 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 
 	cave_lock(flags, LOCK_INC, start);
 
-	if (!cave_enabled) {
-		cave_unlock(flags);
-		return;
-	}
-
 	this_cpu_write(context, *next_ctx);
 	target_voffset = read_target_voffset();
 	new_voffset = next_ctx->voffset;
@@ -523,11 +518,6 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	cave_lock(flags, LOCK_DEC);
 
 	switch_path_contention--;
-
-	if (!cave_enabled) {
-		cave_unlock(flags);
-		return;
-	}
 
 	/* Skip cascade decreases of voltage from many CPUs */
 	if (switch_path_contention) {
@@ -838,16 +828,16 @@ ssize_t enable_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf
 
 static void cave_cpu_enable(void *data)
 {
-	struct cave_context nominal = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
+	struct cave_context *context = (struct cave_context *)data;
 
-	this_cpu_write(context, nominal);
+	_cave_switch(context, CONTEXT_SWITCH);
 }
 
 static void cave_cpu_disable(void *data)
 {
-	struct cave_context nominal = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
+	struct cave_context *context = (struct cave_context *)data;
 
-	this_cpu_write(context, nominal);
+	_cave_switch(context, CONTEXT_SWITCH);
 }
 
 static
@@ -865,30 +855,26 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 	}
 
 	if (enable && !cave_enabled) {
+		/* local copy to avoid races after unlock */
+		struct cave_context context = cave_kernel_context;
 		cave_lock(flags);
-		write_voffset(CAVE_NOMINAL_VOFFSET);
 		cave_apply_tasks();
 		stats_init();
 		cave_enabled = 1;
 		cave_unlock(flags);
-		on_each_cpu(cave_cpu_enable, NULL, 1);
+		on_each_cpu(cave_cpu_enable, &context, 1);
 		pr_info("cave: enabled\n");
 	}
 	else if (!enable && cave_enabled) {
+		struct cave_context nominal = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
 		cave_lock(flags);
 		cave_enabled = 0;
 #ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
 		cave_syscall_context_enabled = 0;
 #endif
 		stats_clear();
-		/* in case we race with a CPU on the decrease path,
-		 * set context to nominal to avoid decrease in voltage
-		 * below nominal. select_voffset() chooses the most
-		 * constrained voffset (nominal).
-		 */
-		write_voffset(CAVE_NOMINAL_VOFFSET);
 		cave_unlock(flags);
-		on_each_cpu(cave_cpu_disable, NULL, 1);
+		on_each_cpu(cave_cpu_disable, &nominal, 1);
 		pr_info("cave: disabled\n");
 	}
 
