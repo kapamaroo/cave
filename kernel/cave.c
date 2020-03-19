@@ -900,7 +900,7 @@ static int print_cave_stats(char *buf)
 	return ret;
 }
 #else
-static int print_cave_stats(char *buf, const bool raw)
+static int print_cave_stats(char *buf)
 {
 	int ret = 0;
 	ret += sprintf(buf + ret, "kernel build without stats\n");
