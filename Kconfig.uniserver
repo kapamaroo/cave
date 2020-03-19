@@ -9,6 +9,11 @@ config UNISERVER_CAVE_STATS
         default n
 	depends on UNISERVER_CAVE
 
+config UNISERVER_CAVE_SKIP_MSR
+        bool "Skip msr voltage."
+        default n
+	depends on UNISERVER_CAVE
+
 config UNISERVER_SYSCALL_CONTEXT
        bool "Set voffset per syscall granularity."
        default n

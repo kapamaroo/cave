@@ -236,7 +236,9 @@ static DEFINE_SPINLOCK(cave_stat_avg_lock);
 static struct cave_stats cave_stat_avg[4];
 static int stat_samples[3] = { 0, 0, 0 };
 
+#ifdef CONFIG_UNISERVER_CAVE_SKIP_MSR
 static bool skip_msr __read_mostly = false;
+#endif
 
 #define FSHIFT	11
 #define FIXED_1	(1 << FSHIFT)
@@ -385,8 +387,10 @@ static void stats_clear(void)
 
 static inline void write_voffset_msr(u64 voffset)
 {
+#ifdef CONFIG_UNISERVER_CAVE_SKIP_MSR
 	if (unlikely(skip_msr))
 		return;
+#endif
 
 	wrmsrl(0x150, CORE_VOFFSET_VAL(voffset));
 	wrmsrl(0x150, CACHE_VOFFSET_VAL(voffset));
@@ -396,11 +400,13 @@ static inline u64 read_voffset_msr(void)
 {
 	u64 voffset;
 
+#ifdef CONFIG_UNISERVER_CAVE_SKIP_MSR
 	if (unlikely(skip_msr))
 #ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 		return target_voffset_cached;
 #else
 		return this_cpu_read(context).voffset;
+#endif
 #endif
 
 	wrmsrl(0x150, 0x8000001000000000);
@@ -1230,7 +1236,18 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	int ret = 0;
 
-	ret += sprintf(buf + ret, "skip_msr = %s\n", skip_msr ? "true" : "false");
+#ifdef CONFIG_UNISERVER_CAVE_SKIP_MSR
+	ret += sprintf(buf + ret, "option:skip_msr = %s\n", skip_msr ? "true" : "false");
+#endif
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+	ret += sprintf(buf + ret, "config:one_voltage_domain\n");
+#endif
+#ifdef CONFIG_UNISERVER_CAVE_STATS
+	ret += sprintf(buf + ret, "config:stats\n");
+#endif
+#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+	ret += sprintf(buf + ret, "config:syscall\n");
+#endif
 
 	return ret;
 }
@@ -1239,6 +1256,7 @@ static
 ssize_t debug_store(struct kobject *kobj, struct kobj_attribute *attr,
 		    const char *buf, size_t count)
 {
+#ifdef CONFIG_UNISERVER_CAVE_SKIP_MSR
 	int val = 0;
 
 	sscanf(buf, "skip_msr = %d", &val);
@@ -1246,6 +1264,7 @@ ssize_t debug_store(struct kobject *kobj, struct kobj_attribute *attr,
 		skip_msr = val;
 		pr_info("cave: skip_msr = %s\n", val ? "true" : "false");
 	}
+#endif
 
 	return count;
 }
