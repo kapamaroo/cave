@@ -14,7 +14,7 @@ config UNISERVER_CAVE_SKIP_MSR
         default n
 	depends on UNISERVER_CAVE
 
-config UNISERVER_SYSCALL_CONTEXT
+config UNISERVER_CAVE_SYSCALL_CONTEXT
        bool "Set voffset per syscall granularity."
        default n
        depends on UNISERVER_CAVE
@@ -24,7 +24,7 @@ config UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
        default y
        depends on UNISERVER_CAVE
 
-config UNISERVER_MSR_VOLTAGE
+config UNISERVER_CAVE_MSR_VOLTAGE
        bool "Measure voltage from MSR, print to trace_printk()."
        default n
        depends on UNISERVER_CAVE_SYSCALL_CONTEXT

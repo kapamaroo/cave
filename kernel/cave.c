@@ -15,7 +15,7 @@
 
 static volatile int cave_enabled = 0;
 
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 static volatile int cave_syscall_context_enabled = 0;
 DECLARE_BITMAP(syscall_enabled, __NR_syscall_max);
 static struct kobject *syscall_enabled_kobj;
@@ -30,7 +30,7 @@ enum reason {
 	CONTEXT_SWITCH
 };
 
-#ifdef CONFIG_UNISERVER_MSR_VOLTAGE
+#ifdef CONFIG_UNISERVER_CAVE_MSR_VOLTAGE
 DEFINE_PER_CPU(unsigned long, syscall_num);
 
 static u64 read_voltage(void)
@@ -131,7 +131,7 @@ static inline unsigned long long start_measure(const enum reason reason)
 {
 	unsigned long long ret;
 
-#ifdef CONFIG_UNISERVER_MSR_VOLTAGE
+#ifdef CONFIG_UNISERVER_CAVE_MSR_VOLTAGE
 	if (reason == EXIT_SYSCALL) {
 		unsigned long syscall_nr = this_cpu_read(syscall_num);
 
@@ -659,10 +659,10 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 	if (!cave_enabled)
 		return;
 
-#ifdef CONFIG_UNISERVER_MSR_VOLTAGE
+#ifdef CONFIG_UNISERVER_CAVE_MSR_VOLTAGE
 	this_cpu_write(syscall_num, syscall_nr);
 #endif
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 	if (cave_syscall_context_enabled && test_bit(syscall_nr, syscall_enabled))
 		context = &cave_syscall_context;
 
@@ -679,7 +679,7 @@ __visible void cave_entry_switch(void)
 	if (!cave_enabled)
 		return;
 
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 	current->cave_data.kernel_ctx = *context;
 #endif
 	_cave_switch(context, ENTRY);
@@ -743,7 +743,7 @@ void cave_fork_init(struct task_struct *p)
 	spin_lock_init(&p->cave_data.lock);
 
 	if (!p->cave_data.skip_default_user_context) {
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 		p->cave_data.kernel_ctx = cave_kernel_context;
 #endif
 		p->cave_data.user_ctx = cave_user_context;
@@ -781,7 +781,7 @@ static void cave_apply_tasks(void)
 	struct task_struct *g, *p;
 	unsigned long flags;
 
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 	int i;
 
 	/* Idle tasks do not run on user mode, i.e. they don't enter kernel
@@ -793,7 +793,7 @@ static void cave_apply_tasks(void)
 #endif
 	for_each_process_thread(g, p) {
 		spin_lock_irqsave(&p->cave_data.lock, flags);
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 		p->cave_data.kernel_ctx = cave_kernel_context;
 #endif
 		if (!p->cave_data.skip_default_user_context)
@@ -964,7 +964,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 		struct cave_context nominal = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
 		cave_lock(flags);
 		cave_enabled = 0;
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 		cave_syscall_context_enabled = 0;
 #endif
 		stats_clear();
@@ -1003,7 +1003,7 @@ ssize_t max_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 	cave_lock(flags);
 	if (voffset < cave_kernel_context.voffset)
 		pr_warn("cave: new value of max_voffset less than kernel voffset\n");
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 	else if (voffset < cave_syscall_context.voffset)
 		pr_warn("cave: new value of max_voffset less than syscall voffset\n");
 #endif
@@ -1015,7 +1015,7 @@ ssize_t max_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 	return count;
 }
 
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 static
 ssize_t enable_syscall_voffset_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -1093,7 +1093,7 @@ ssize_t kernel_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 	return count;
 }
 
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 static
 ssize_t syscall_voffset_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -1240,7 +1240,7 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 	ret += sprintf(buf + ret, "config:stats\n");
 #endif
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 	ret += sprintf(buf + ret, "config:syscall\n");
 #endif
 
@@ -1269,7 +1269,7 @@ ssize_t ctl_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	int ret = 0;
 
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 	static char *s = (void *)-1;
 
 	if (s == (void *)-1)
@@ -1290,7 +1290,7 @@ static
 ssize_t ctl_store(struct kobject *kobj, struct kobj_attribute *attr,
 		  const char *buf, size_t count)
 {
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 	int ret = 0;
 
 	DECLARE_BITMAP(tmp, __NR_syscall_max);
@@ -1346,7 +1346,7 @@ KERNEL_ATTR_WO(reset_stats);
 KERNEL_ATTR_RO(voltage);
 KERNEL_ATTR_RW(max_voffset);
 KERNEL_ATTR_RW(kernel_voffset);
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 KERNEL_ATTR_RW(syscall_voffset);
 KERNEL_ATTR_RW(enable_syscall_voffset);
 #endif
@@ -1354,7 +1354,7 @@ KERNEL_ATTR_RW(userspace_voffset);
 KERNEL_ATTR_RW(debug);
 KERNEL_ATTR_RW(ctl);
 
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 #define HELPERS(__nr, __sys)						\
 	static								\
 	ssize_t __sys##_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf) \
@@ -1417,7 +1417,7 @@ static struct attribute_group attr_group = {
 		&voltage_attr.attr,
 		&max_voffset_attr.attr,
 		&kernel_voffset_attr.attr,
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 		&syscall_voffset_attr.attr,
 		&enable_syscall_voffset_attr.attr,
 #endif
@@ -1440,7 +1440,7 @@ int cave_init(void)
 		return -ENOMEM;
 	}
 
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 	syscall_enabled_kobj = kobject_create_and_add("syscall_enabled", cave_kobj);
 	if (!syscall_enabled_kobj) {
 		pr_err("cave: failed\n");
@@ -1454,7 +1454,7 @@ int cave_init(void)
 		return err;
 	}
 
-#ifdef CONFIG_UNISERVER_SYSCALL_CONTEXT
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 	err = sysfs_create_group(syscall_enabled_kobj, &syscall_enabled_attr_group);
 	if (err) {
 		pr_err("cave: failed\n");
