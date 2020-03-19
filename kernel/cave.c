@@ -71,24 +71,32 @@ static void log_voltage(void)
 enum cave_switch_case {
 	CAVE_INC = 0,
 	CAVE_DEC,
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 	SKIP_FAST,
 	SKIP_SLOW,
 	SKIP_REPLAY,
 	SKIP_RACE,
+#endif
 	CAVE_SWITCH_CASES
 };
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 enum cave_lock_case {
 	LOCK_INC = 0,
 	LOCK_DEC,
 	CAVE_LOCK_CASES
 };
+#else
+#define CAVE_LOCK_CASES	0
+#endif
 
 enum cave_wait_cases {
 	WAIT_TARGET = 0,
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 	WAIT_CURR,
+#endif
 	CAVE_WAIT_CASES
 };
 
@@ -101,6 +109,7 @@ struct cave_stats {
 static char *cave_stat_name[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES] = {
 	__stringify(CAVE_INC),
 	__stringify(CAVE_DEC),
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 	__stringify(SKIP_FAST),
 	__stringify(SKIP_SLOW),
 	__stringify(SKIP_REPLAY),
@@ -109,8 +118,11 @@ static char *cave_stat_name[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASE
 	__stringify(LOCK_INC),
 	__stringify(LOCK_DEC),
 
+#endif
 	__stringify(WAIT_TARGET),
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 	__stringify(WAIT_CURR)
+#endif
 };
 
 DEFINE_PER_CPU(struct cave_stats, time_stats);
@@ -146,6 +158,7 @@ static inline void _end_measure(unsigned long long start, enum cave_switch_case 
 	t->counter[c]++;
 }
 
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 static inline void _end_lock_measure(unsigned long long start, enum cave_lock_case c)
 {
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
@@ -157,6 +170,7 @@ static inline void _end_lock_measure(unsigned long long start, enum cave_lock_ca
 	t->time[CAVE_SWITCH_CASES + c] += time;
 	t->counter[CAVE_SWITCH_CASES + c]++;
 }
+#endif
 
 #define end_measure(start, c, r)	_end_measure(start, c, r)
 #else
@@ -165,6 +179,7 @@ static inline void _end_lock_measure(unsigned long long start, enum cave_lock_ca
 
 static struct kobject *cave_kobj;
 
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 static DEFINE_SPINLOCK(cave_lock);
 
 #define _cave_lock_1(flags)	spin_lock_irqsave(&cave_lock, flags)
@@ -198,6 +213,10 @@ static DEFINE_SPINLOCK(cave_lock);
 
 #define cave_lock(...)	GET_MACRO(__VA_ARGS__, _cave_lock_3, _cave_lock_2, _cave_lock_1, fn0)(__VA_ARGS__)
 #define cave_unlock(flags)	spin_unlock_irqrestore(&cave_lock, flags)
+#else
+#define cave_lock(...)
+#define cave_unlock(flags)	(void)(flags)
+#endif
 
 #define CAVE_CONTEXT(__v)	((struct cave_context){ .voffset = __v })
 
@@ -207,8 +226,10 @@ static volatile struct cave_context cave_user_context __read_mostly = CAVE_CONTE
 
 DEFINE_PER_CPU(struct cave_context, context) = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
 
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 static volatile long target_voffset_cached = CAVE_NOMINAL_VOFFSET;
 static volatile long curr_voffset = CAVE_NOMINAL_VOFFSET;
+#endif
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 static DEFINE_SPINLOCK(cave_stat_avg_lock);
@@ -273,6 +294,7 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 		d.time[x] = (d.time[x] * (n) + s.time[x]) / ((n) + 1);	\
 	} while (0)
 
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 #define RUNNING_AVG_STAT(d, s, n, l)					\
 	do {								\
 		if (n == l)						\
@@ -290,6 +312,18 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 		__RUNNING_AVG_STAT(d, s, n, CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR); \
 		n++;							\
 	} while (0)
+#else
+#define RUNNING_AVG_STAT(d, s, n, l)					\
+	do {								\
+		if (n == l)						\
+			n--;						\
+									\
+		__RUNNING_AVG_STAT(d, s, n, CAVE_INC);			\
+		__RUNNING_AVG_STAT(d, s, n, CAVE_DEC);			\
+		__RUNNING_AVG_STAT(d, s, n, CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET); \
+		n++;							\
+	} while (0)
+#endif
 
 	spin_lock_irqsave(&cave_stat_avg_lock, flags);
 	cave_stat_avg[0] = t;
@@ -363,7 +397,11 @@ static inline u64 read_voffset_msr(void)
 	u64 voffset;
 
 	if (unlikely(skip_msr))
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 		return target_voffset_cached;
+#else
+		return this_cpu_read(context).voffset;
+#endif
 
 	wrmsrl(0x150, 0x8000001000000000);
 	rdmsrl(0x150, voffset);
@@ -373,6 +411,7 @@ static inline u64 read_voffset_msr(void)
 
 /* ************************************************************************** */
 
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 static void write_target_voffset(long new_voffset)
 {
 	target_voffset_cached = new_voffset;
@@ -555,6 +594,57 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	cave_unlock(flags);
 	end_measure(start, CAVE_DEC, reason);
 }
+#else
+static inline void wait_target_voffset(long new_voffset)
+{
+#ifdef CONFIG_UNISERVER_CAVE_STATS
+	unsigned long long start;
+	struct cave_stats *t = this_cpu_ptr(&time_stats);
+
+	start = rdtsc();
+#endif
+
+	while (new_voffset < read_voffset_msr())
+		cpu_relax();
+
+#ifdef CONFIG_UNISERVER_CAVE_STATS
+	t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET] += rdtsc() - start;
+	t->counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET]++;
+#endif
+}
+
+static inline void _cave_switch(const volatile struct cave_context *next_ctx,
+				const enum reason reason)
+{
+	long target_voffset = this_cpu_read(context).voffset;
+	long new_voffset = next_ctx->voffset;
+
+#ifdef CONFIG_UNISERVER_CAVE_STATS
+	unsigned long long start;
+#endif
+
+	/* This fast path works after cave_apply_tasks() completes. Until then,
+	 * it may take some time until the system transitions to cave mechanism.
+	 */
+	if (new_voffset == target_voffset)
+		return;
+
+#ifdef CONFIG_UNISERVER_CAVE_STATS
+	start = start_measure(reason);
+#endif
+
+	this_cpu_write(context, *next_ctx);
+	write_voffset_msr(new_voffset);
+
+	if (new_voffset < target_voffset) {
+		wait_target_voffset(new_voffset);
+		end_measure(start, CAVE_INC, reason);
+	}
+	else {
+		end_measure(start, CAVE_DEC, reason);
+	}
+}
+#endif
 
 __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 {
@@ -739,7 +829,11 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, const int t_min)
 	ret += sprintf(buf + ret, "total_avg %llu 100.00 100.00\n", time / counter);
 
 	for (j = 0; j < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; j++) {
-		if (j == SKIP_FAST || j == CAVE_SWITCH_CASES || j == CAVE_SWITCH_CASES + CAVE_LOCK_CASES)
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+		if (j == SKIP_FAST)
+			SEPARATOR();
+#endif
+		if (j == CAVE_SWITCH_CASES || j == CAVE_SWITCH_CASES + CAVE_LOCK_CASES)
 			SEPARATOR();
 		if (t->counter[j] == 0) {
 			SEPARATOR();
@@ -761,10 +855,12 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, const int t_min)
 			       S(t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET], t->time[CAVE_INC]));
 	}
 
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 	if (time && time != t->time[CAVE_INC]) {
 		ret += sprintf(buf + ret, "wait_curr/eq_dec " FMT "\n",
 			       S(t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR], time - t->time[CAVE_INC]));
 	}
+#endif
 
 	SEPARATOR();
 
@@ -1111,14 +1207,18 @@ ssize_t stats_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 static
 ssize_t voltage_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
-	unsigned long flags;
-
 	int ret = 0;
 	long voffset;
+
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+	unsigned long flags;
 
 	cave_lock(flags);
 	voffset = read_target_voffset();
 	cave_unlock(flags);
+#else
+	voffset = this_cpu_read(context).voffset;
+#endif
 
 	ret += sprintf(buf + ret, "voffset %ld\n", -voffset);
 
@@ -1349,7 +1449,11 @@ int cave_init(void)
 	cave_lock(flags);
 
 	voffset = read_voffset_msr();
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 	write_voffset(CAVE_NOMINAL_VOFFSET);
+#else
+	write_voffset_msr(CAVE_NOMINAL_VOFFSET);
+#endif
 	cave_unlock(flags);
 
 	pr_info("cave: msr offset: %ld\n", -voffset);
