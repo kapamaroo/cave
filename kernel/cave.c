@@ -899,13 +899,6 @@ static int print_cave_stats(char *buf)
 
 	return ret;
 }
-#else
-static int print_cave_stats(char *buf)
-{
-	int ret = 0;
-	ret += sprintf(buf + ret, "kernel build without stats\n");
-	return ret;
-}
 #endif
 
 /* sysfs interface */
@@ -1184,6 +1177,7 @@ ssize_t userspace_voffset_store(struct kobject *kobj, struct kobj_attribute *att
 	return count;
 }
 
+#ifdef CONFIG_UNISERVER_CAVE_STATS
 static
 ssize_t reset_stats_store(struct kobject *kobj, struct kobj_attribute *attr,
 			  const char *buf, size_t count)
@@ -1209,6 +1203,7 @@ ssize_t stats_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 
 	return ret;
 }
+#endif
 
 static
 ssize_t voltage_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -1344,8 +1339,10 @@ ssize_t ctl_store(struct kobject *kobj, struct kobj_attribute *attr,
 }
 
 KERNEL_ATTR_RW(enable);
+#ifdef CONFIG_UNISERVER_CAVE_STATS
 KERNEL_ATTR_RO(stats);
 KERNEL_ATTR_WO(reset_stats);
+#endif
 KERNEL_ATTR_RO(voltage);
 KERNEL_ATTR_RW(max_voffset);
 KERNEL_ATTR_RW(kernel_voffset);
@@ -1413,8 +1410,10 @@ static struct attribute_group syscall_enabled_attr_group = {
 static struct attribute_group attr_group = {
 	.attrs = (struct attribute * []) {
 		&enable_attr.attr,
+#ifdef CONFIG_UNISERVER_CAVE_STATS
 		&reset_stats_attr.attr,
 		&stats_attr.attr,
+#endif
 		&voltage_attr.attr,
 		&max_voffset_attr.attr,
 		&kernel_voffset_attr.attr,
