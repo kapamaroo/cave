@@ -284,6 +284,8 @@ entry_SYSCALL64_slow_path:
 	call	do_syscall_64		/* returns with IRQs disabled */
 
 return_from_SYSCALL_64:
+	EXIT_HOOK_SYSCALL
+
 	RESTORE_EXTRA_REGS
 	TRACE_IRQS_IRETQ		/* we're about to change IF */
 
@@ -354,21 +356,12 @@ return_from_SYSCALL_64:
 	 * perf profiles. Nothing jumps here.
 	 */
 syscall_return_via_sysret:
-	EXIT_HOOK_SYSCALL
-
-#ifdef CONFIG_UNISERVER_CAVE
-	/* voffset calls may clobber rcx and r11 */
-	RESTORE_C_REGS
-#else
 	/* rcx and r11 are already restored (see code above) */
 	RESTORE_C_REGS_EXCEPT_RCX_R11
-#endif
 	movq	RSP(%rsp), %rsp
 	USERGS_SYSRET64
 
 opportunistic_sysret_failed:
-	EXIT_HOOK_SYSCALL
-
 	SWAPGS
 	jmp	restore_c_regs_and_iret
 END(entry_SYSCALL_64)
