@@ -249,6 +249,15 @@ __visible inline void syscall_return_slowpath(struct pt_regs *regs)
 	    WARN(irqs_disabled(), "syscall %ld left IRQs disabled", regs->orig_ax))
 		local_irq_enable();
 
+#ifdef CONFIG_UNISERVER_CAVE
+        {
+		__visible void cave_syscall_exit_switch(void);
+		local_irq_disable();
+		cave_syscall_exit_switch();
+		local_irq_enable();
+        }
+#endif
+
 	/*
 	 * First do one-time work.  If these work items are enabled, we
 	 * want to run them exactly once per syscall exit with IRQs on.
@@ -271,6 +280,15 @@ __visible void do_syscall_64(struct pt_regs *regs)
 
 	if (READ_ONCE(ti->flags) & _TIF_WORK_SYSCALL_ENTRY)
 		nr = syscall_trace_enter(regs);
+
+#ifdef CONFIG_UNISERVER_CAVE
+        {
+		__visible void cave_syscall_entry_switch(unsigned long syscall_nr);
+		local_irq_disable();
+		cave_syscall_entry_switch(nr);
+		local_irq_enable();
+        }
+#endif
 
 	/*
 	 * NB: Native and x32 syscalls are dispatched from the same
