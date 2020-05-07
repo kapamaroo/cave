@@ -205,6 +205,8 @@ GLOBAL(entry_SYSCALL_64_after_swapgs)
 	pushq	%r11				/* pt_regs->r11 */
 	sub	$(6*8), %rsp			/* pt_regs->bp, bx, r12-15 not saved */
 
+	ENTRY_HOOK_SYSCALL
+
 	/*
 	 * If we need to do entry work or if we guess we'll need to do
 	 * exit work, go straight to the slow path.
@@ -214,8 +216,6 @@ GLOBAL(entry_SYSCALL_64_after_swapgs)
 	jnz	entry_SYSCALL64_slow_path
 
 entry_SYSCALL_64_fastpath:
-	ENTRY_HOOK_SYSCALL
-
 	/*
 	 * Easy case: enable interrupts and issue the syscall.  If the syscall
 	 * needs pt_regs, we'll call a stub that disables interrupts again
@@ -284,6 +284,8 @@ entry_SYSCALL64_slow_path:
 	call	do_syscall_64		/* returns with IRQs disabled */
 
 return_from_SYSCALL_64:
+	EXIT_HOOK_SYSCALL
+
 	RESTORE_EXTRA_REGS
 	TRACE_IRQS_IRETQ		/* we're about to change IF */
 
