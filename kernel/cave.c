@@ -750,7 +750,6 @@ void cave_fork_init(struct task_struct *p)
 	}
 }
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 /*
  * Context switch takes place in kernel mode
  * switch voltage again on the user exit path.
@@ -771,9 +770,13 @@ void cave_context_switch_voltage(struct task_struct *prev, struct task_struct *n
 	 * irq from kernel, syscall slowpath.
 	 */
 
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 	_cave_switch(next_ctx, CONTEXT_SWITCH);
-}
+#else
+	if (unlikely(is_idle_task(next)))
+		_cave_switch(next_ctx, CONTEXT_SWITCH);
 #endif
+}
 
 /* protected by cave_lock to avoid races with new voffset values */
 static void cave_apply_tasks(void)
@@ -781,7 +784,6 @@ static void cave_apply_tasks(void)
 	struct task_struct *g, *p;
 	unsigned long flags;
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 	int i;
 
 	/* Idle tasks do not run on user mode, i.e. they don't enter kernel
@@ -789,7 +791,10 @@ static void cave_apply_tasks(void)
 	 * Therefore it is safe to set kernel_ctx for them here.
 	 */
 	for_each_possible_cpu(i)
+#if 0
 		idle_task(i)->cave_data.kernel_ctx = cave_kernel_context;
+#else
+		idle_task(i)->cave_data.kernel_ctx = cave_user_context;
 #endif
 	for_each_process_thread(g, p) {
 		spin_lock_irqsave(&p->cave_data.lock, flags);
