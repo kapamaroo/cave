@@ -80,6 +80,91 @@ enum cave_switch_case {
 	CAVE_SWITCH_CASES
 };
 
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+struct syscall_ratelimit {
+    unsigned int counter;
+    int enabled;
+    struct delayed_work dwork;
+};
+
+DEFINE_PER_CPU(struct syscall_ratelimit, srl);
+
+static unsigned int syscall_rate_period = MSEC_PER_SEC;
+static unsigned int syscall_rate_limit = 1000;
+
+static inline void __syscall_rate_work(struct syscall_ratelimit *p)
+{
+        unsigned int rate = p->counter * (MSEC_PER_SEC / syscall_rate_period);
+        int enabled = p->enabled;
+
+        p->counter = 0;
+
+        if (rate > syscall_rate_limit) {
+		if (enabled > 0) {
+			/*
+                         * transition value from user -> kernel context
+                         * see entry point for details
+                         */
+			p->enabled = -1;
+
+			pr_warn("cave: syscall rate inc: cpu%d %u (limit=%u / sec, period=%u ms)\n",
+				smp_processor_id(), rate, syscall_rate_limit, syscall_rate_period);
+                }
+        }
+        else {
+		if (enabled <= 0) {
+			p->enabled = 1;
+
+			pr_warn("cave: syscall rate dec: cpu%d %u (limit=%u / sec, period=%u ms)\n",
+				smp_processor_id(), rate, syscall_rate_limit, syscall_rate_period);
+                }
+        }
+}
+
+static void syscall_rate_work(struct work_struct *work)
+{
+    struct delayed_work *dwork = to_delayed_work(work);
+
+    __syscall_rate_work(this_cpu_ptr(&srl));
+
+    schedule_delayed_work_on(smp_processor_id(), dwork,
+                             msecs_to_jiffies(syscall_rate_period));
+}
+
+static void syscall_ratelimit_init(void)
+{
+	int i;
+
+	for_each_online_cpu(i) {
+		struct syscall_ratelimit *p = per_cpu_ptr(&srl, i);
+		p->counter = 0;
+		p->enabled = 1;
+
+                INIT_DEFERRABLE_WORK(&p->dwork, syscall_rate_work);
+                schedule_delayed_work_on(i, &per_cpu_ptr(&srl, i)->dwork,
+                                         msecs_to_jiffies(syscall_rate_period));
+	}
+}
+
+static void syscall_ratelimit_clear(void)
+{
+	int i;
+
+	for_each_online_cpu(i) {
+		struct syscall_ratelimit *p = per_cpu_ptr(&srl, i);
+                cancel_delayed_work_sync(&p->dwork);
+        }
+}
+#else
+static void syscall_ratelimit_init(void)
+{
+}
+
+static void syscall_ratelimit_clear(void)
+{
+}
+#endif
+
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 
 #ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
@@ -656,17 +741,43 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 {
 	volatile struct cave_context *context = &cave_kernel_context;
 
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+        struct syscall_ratelimit *p = this_cpu_ptr(&srl);
+#endif
+
 	if (!cave_enabled)
 		return;
 
 #ifdef CONFIG_UNISERVER_CAVE_MSR_VOLTAGE
 	this_cpu_write(syscall_num, syscall_nr);
 #endif
+
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+        /*
+         * Any changes regarding rate limit take effect on the exit path and
+         * affect the next entry point.
+         */
+	p->counter++;
+
+        if (unlikely(!p->enabled))
+		return;
+
+        if (unlikely(p->enabled < 0)) {
+		p->enabled = 0;
+
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+		goto skip_syscall_context;
+#endif
+        }
+#endif
+
 #ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 	if (cave_syscall_context_enabled && test_bit(syscall_nr, syscall_enabled))
 		context = &cave_syscall_context;
 
 	current->cave_data.kernel_ctx = *context;
+
+ skip_syscall_context:
 #endif
 
 	_cave_switch(context, ENTRY_SYSCALL);
@@ -706,6 +817,11 @@ __visible void cave_syscall_exit_switch(void)
 
 	if (!cave_enabled)
 		return;
+
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+	if (this_cpu_ptr(&srl)->enabled <= 0)
+		return;
+#endif
 
 	_cave_switch(context, EXIT_SYSCALL);
 }
@@ -960,6 +1076,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 		cave_lock(flags);
 		cave_apply_tasks();
 		stats_init();
+                syscall_ratelimit_init();
 		cave_enabled = 1;
 		cave_unlock(flags);
 		on_each_cpu(cave_cpu_enable, &context, 1);
@@ -972,6 +1089,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 #ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 		cave_syscall_context_enabled = 0;
 #endif
+                syscall_ratelimit_clear();
 		stats_clear();
 		cave_unlock(flags);
 		on_each_cpu(cave_cpu_disable, &nominal, 1);
@@ -1231,6 +1349,80 @@ ssize_t voltage_show(struct kobject *kobj, struct kobj_attribute *attr, char *bu
 	return ret;
 }
 
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+static
+ssize_t syscall_rate_limit_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	int ret = 0;
+
+	ret += sprintf(buf, "%u\n", syscall_rate_limit);
+
+	return ret;
+}
+
+static
+ssize_t syscall_rate_limit_store(struct kobject *kobj, struct kobj_attribute *attr,
+                                 const char *buf, size_t count)
+{
+	unsigned long flags;
+	unsigned int limit;
+	int err;
+
+	err = kstrtouint(buf, 10, &limit);
+	if (err) {
+		pr_warn("cave: invalid %s value\n", attr->attr.name);
+		return count;
+	}
+
+	cave_lock(flags);
+
+	if (cave_enabled)
+		pr_warn("cave: must be disabled to change syscall rate limit\n");
+	else
+		syscall_rate_limit = limit;
+
+	cave_unlock(flags);
+
+	return count;
+}
+
+static
+ssize_t syscall_rate_period_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	int ret = 0;
+
+	ret += sprintf(buf, "%u\n", syscall_rate_period);
+
+	return ret;
+}
+
+static
+ssize_t syscall_rate_period_store(struct kobject *kobj, struct kobj_attribute *attr,
+                                  const char *buf, size_t count)
+{
+	unsigned long flags;
+	unsigned int time;
+	int err;
+
+	err = kstrtouint(buf, 10, &time);
+	if (err) {
+		pr_warn("cave: invalid %s value\n", attr->attr.name);
+		return count;
+	}
+
+	cave_lock(flags);
+
+	if (cave_enabled)
+		pr_warn("cave: must be disabled to change syscall rate period\n");
+	else
+		syscall_rate_period = time;
+
+	cave_unlock(flags);
+
+	return count;
+}
+#endif
+
 static
 ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -1358,6 +1550,10 @@ KERNEL_ATTR_RW(enable_syscall_voffset);
 KERNEL_ATTR_RW(userspace_voffset);
 KERNEL_ATTR_RW(debug);
 KERNEL_ATTR_RW(ctl);
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+KERNEL_ATTR_RW(syscall_rate_limit);
+KERNEL_ATTR_RW(syscall_rate_period);
+#endif
 
 #ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 #define HELPERS(__nr, __sys)						\
@@ -1429,6 +1625,10 @@ static struct attribute_group attr_group = {
 		&userspace_voffset_attr.attr,
 		&debug_attr.attr,
 		&ctl_attr.attr,
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+                &syscall_rate_limit_attr.attr,
+                &syscall_rate_period_attr.attr,
+#endif
 		NULL
 	}
 };
