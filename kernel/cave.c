@@ -790,6 +790,11 @@ __visible void cave_entry_switch(void)
 	if (!cave_enabled)
 		return;
 
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+	if (this_cpu_ptr(&srl)->enabled <= 0)
+		return;
+#endif
+
 #ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 	current->cave_data.kernel_ctx = *context;
 #endif
@@ -807,6 +812,11 @@ __visible void cave_exit_switch(void)
 
 	if (!cave_enabled)
 		return;
+
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+	if (this_cpu_ptr(&srl)->enabled <= 0)
+		return;
+#endif
 
 	_cave_switch(context, EXIT);
 }
