@@ -141,7 +141,7 @@ static void syscall_ratelimit_init(void)
 		p->enabled = 1;
 
                 INIT_DEFERRABLE_WORK(&p->dwork, syscall_rate_work);
-                schedule_delayed_work_on(i, &per_cpu_ptr(&srl, i)->dwork,
+                schedule_delayed_work_on(i, &p->dwork,
                                          msecs_to_jiffies(syscall_rate_period));
 	}
 }
