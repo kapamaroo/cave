@@ -153,6 +153,8 @@ static void syscall_ratelimit_clear(void)
 	for_each_online_cpu(i) {
 		struct syscall_ratelimit *p = per_cpu_ptr(&srl, i);
                 cancel_delayed_work_sync(&p->dwork);
+		p->counter = 0;
+		p->enabled = 1;
         }
 }
 #else
@@ -1377,7 +1379,6 @@ static
 ssize_t syscall_rate_limit_store(struct kobject *kobj, struct kobj_attribute *attr,
                                  const char *buf, size_t count)
 {
-	unsigned long flags;
 	unsigned int limit;
 	int err;
 
@@ -1387,14 +1388,13 @@ ssize_t syscall_rate_limit_store(struct kobject *kobj, struct kobj_attribute *at
 		return count;
 	}
 
-	cave_lock(flags);
-
-	if (cave_enabled)
-		pr_warn("cave: must be disabled to change syscall rate limit\n");
+	syscall_ratelimit_clear();
+	syscall_rate_limit = limit;
+	if (syscall_rate_limit && syscall_rate_period)
+		syscall_ratelimit_init();
 	else
-		syscall_rate_limit = limit;
-
-	cave_unlock(flags);
+		pr_info("cave: ratelimit: disable (limit=%u, period=%d)\n",
+                        syscall_rate_limit, syscall_rate_period);
 
 	return count;
 }
@@ -1413,7 +1413,6 @@ static
 ssize_t syscall_rate_period_store(struct kobject *kobj, struct kobj_attribute *attr,
                                   const char *buf, size_t count)
 {
-	unsigned long flags;
 	unsigned int time;
 	int err;
 
@@ -1423,14 +1422,13 @@ ssize_t syscall_rate_period_store(struct kobject *kobj, struct kobj_attribute *a
 		return count;
 	}
 
-	cave_lock(flags);
-
-	if (cave_enabled)
-		pr_warn("cave: must be disabled to change syscall rate period\n");
+	syscall_ratelimit_clear();
+	syscall_rate_period = time;
+	if (syscall_rate_limit && syscall_rate_period)
+		syscall_ratelimit_init();
 	else
-		syscall_rate_period = time;
-
-	cave_unlock(flags);
+		pr_info("cave: ratelimit: disable (limit=%u, period=%d)\n",
+                        syscall_rate_limit, syscall_rate_period);
 
 	return count;
 }
