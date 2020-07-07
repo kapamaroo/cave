@@ -137,6 +137,9 @@ static void syscall_ratelimit_init(void)
 {
 	int i;
 
+	if (syscall_rate_limit == 0 || syscall_rate_period == 0)
+		return;
+
 	for_each_online_cpu(i) {
 		struct syscall_ratelimit *p = per_cpu_ptr(&srl, i);
 		p->counter = 0;
@@ -146,6 +149,9 @@ static void syscall_ratelimit_init(void)
                 schedule_delayed_work_on(i, &p->dwork,
                                          msecs_to_jiffies(syscall_rate_period));
 	}
+
+	pr_info("cave: ratelimit: enable (limit=%u, period=%d)\n",
+		syscall_rate_limit, syscall_rate_period);
 }
 
 static void syscall_ratelimit_clear(void)
@@ -158,6 +164,8 @@ static void syscall_ratelimit_clear(void)
 		p->counter = 0;
 		p->enabled = 1;
         }
+
+	pr_info("cave: ratelimit: disable\n");
 }
 #else
 static void syscall_ratelimit_init(void)
@@ -1407,14 +1415,7 @@ ssize_t syscall_rate_limit_store(struct kobject *kobj, struct kobj_attribute *at
 
 	syscall_ratelimit_clear();
 	syscall_rate_limit = limit;
-	if (syscall_rate_limit && syscall_rate_period) {
-		syscall_ratelimit_init();
-		pr_info("cave: ratelimit: enable (limit=%u, period=%d)\n",
-                        syscall_rate_limit, syscall_rate_period);
-	}
-	else {
-		pr_info("cave: ratelimit: disable\n");
-	}
+	syscall_ratelimit_init();
 
 	return count;
 }
@@ -1444,14 +1445,7 @@ ssize_t syscall_rate_period_store(struct kobject *kobj, struct kobj_attribute *a
 
 	syscall_ratelimit_clear();
 	syscall_rate_period = time;
-	if (syscall_rate_limit && syscall_rate_period) {
-		syscall_ratelimit_init();
-		pr_info("cave: ratelimit: enable (limit=%u, period=%d)\n",
-                        syscall_rate_limit, syscall_rate_period);
-	}
-	else {
-		pr_info("cave: ratelimit: disable\n");
-	}
+	syscall_ratelimit_init();
 
 	return count;
 }
