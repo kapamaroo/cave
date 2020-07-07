@@ -93,6 +93,7 @@ DEFINE_PER_CPU(struct syscall_ratelimit, srl);
 
 static unsigned int syscall_rate_period = MSEC_PER_SEC;
 static unsigned int syscall_rate_limit = 1000;
+static bool cave_ratelimit __read_mostly = true;
 
 static inline void __syscall_rate_work(struct syscall_ratelimit *p)
 {
@@ -137,7 +138,7 @@ static void syscall_ratelimit_init(void)
 {
 	int i;
 
-	if (syscall_rate_limit == 0 || syscall_rate_period == 0)
+	if (!cave_ratelimit)
 		return;
 
 	for_each_online_cpu(i) {
@@ -157,6 +158,9 @@ static void syscall_ratelimit_init(void)
 static void syscall_ratelimit_clear(void)
 {
 	int i;
+
+	if (!cave_ratelimit)
+		return;
 
 	for_each_online_cpu(i) {
 		struct syscall_ratelimit *p = per_cpu_ptr(&srl, i);
@@ -1116,7 +1120,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 		cave_lock(flags);
 		cave_apply_tasks();
 		stats_init();
-                syscall_ratelimit_init();
+		syscall_ratelimit_init();
 		cave_enabled = 1;
 		cave_unlock(flags);
 		on_each_cpu(cave_cpu_enable, &context, 1);
@@ -1129,7 +1133,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 #ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
 		cave_syscall_context_enabled = 0;
 #endif
-                syscall_ratelimit_clear();
+		syscall_ratelimit_clear();
 		stats_clear();
 		cave_unlock(flags);
 		on_each_cpu(cave_cpu_disable, &nominal, 1);
@@ -1408,14 +1412,12 @@ ssize_t syscall_rate_limit_store(struct kobject *kobj, struct kobj_attribute *at
 	int err;
 
 	err = kstrtouint(buf, 10, &limit);
-	if (err) {
+	if (err || limit == 0) {
 		pr_warn("cave: invalid %s value\n", attr->attr.name);
 		return count;
 	}
 
-	syscall_ratelimit_clear();
 	syscall_rate_limit = limit;
-	syscall_ratelimit_init();
 
 	return count;
 }
@@ -1438,14 +1440,12 @@ ssize_t syscall_rate_period_store(struct kobject *kobj, struct kobj_attribute *a
 	int err;
 
 	err = kstrtouint(buf, 10, &time);
-	if (err) {
+	if (err || time == 0) {
 		pr_warn("cave: invalid %s value\n", attr->attr.name);
 		return count;
 	}
 
-	syscall_ratelimit_clear();
 	syscall_rate_period = time;
-	syscall_ratelimit_init();
 
 	return count;
 }
@@ -1503,12 +1503,15 @@ ssize_t ctl_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 		return 0;
 
 	bitmap_print_to_pagebuf(false, s, syscall_enabled, __NR_syscall_max);
-	ret = snprintf(buf, PAGE_SIZE, "cave: syscall bitmap: %s\n", s);
+	ret += snprintf(buf + ret, PAGE_SIZE, "cave: syscall bitmap: %s\n", s);
 
 	// kfree(s);
 #endif
 
-	ret += sprintf(buf, "nowait=%s\n", cave_nowait ? "true" : "false");
+	ret += sprintf(buf + ret, "nowait=%s\n", cave_nowait ? "true" : "false");
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+	ret += sprintf(buf + ret, "ratelimit=%s\n", cave_ratelimit ? "true" : "false");
+#endif
 
 	return ret;
 }
@@ -1578,6 +1581,25 @@ ssize_t ctl_store(struct kobject *kobj, struct kobj_attribute *attr,
 		}
 		return count;
 	}
+
+#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+	if (strncmp(buf, "ratelimit:true", 14) == 0) {
+		if (!cave_ratelimit) {
+			cave_ratelimit = true;
+			if (cave_enabled)
+				syscall_ratelimit_init();
+		}
+		return count;
+	}
+	else if (strncmp(buf, "ratelimit:false", 15) == 0) {
+		if (cave_ratelimit) {
+			cave_ratelimit = false;
+			if (cave_enabled)
+				syscall_ratelimit_clear();
+		}
+		return count;
+	}
+#endif
 
 	return count;
 }
