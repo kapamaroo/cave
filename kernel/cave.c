@@ -532,7 +532,9 @@ static inline void wait_curr_voffset(long new_voffset)
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 	unsigned long long start;
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
+#endif
 
+#ifdef CONFIG_UNISERVER_CAVE_STATS
 	if (new_voffset >= curr_voffset)
 		return;
 
@@ -553,7 +555,9 @@ static inline void wait_target_voffset(long new_voffset)
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 	unsigned long long start;
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
+#endif
 
+#ifdef CONFIG_UNISERVER_CAVE_STATS
 	start = rdtsc();
 #endif
 
@@ -693,7 +697,9 @@ static inline void wait_target_voffset(long new_voffset)
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 	unsigned long long start;
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
+#endif
 
+#ifdef CONFIG_UNISERVER_CAVE_STATS
 	start = rdtsc();
 #endif
 
