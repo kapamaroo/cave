@@ -1396,11 +1396,14 @@ ssize_t syscall_rate_limit_store(struct kobject *kobj, struct kobj_attribute *at
 
 	syscall_ratelimit_clear();
 	syscall_rate_limit = limit;
-	if (syscall_rate_limit && syscall_rate_period)
+	if (syscall_rate_limit && syscall_rate_period) {
 		syscall_ratelimit_init();
-	else
-		pr_info("cave: ratelimit: disable (limit=%u, period=%d)\n",
+		pr_info("cave: ratelimit: enable (limit=%u, period=%d)\n",
                         syscall_rate_limit, syscall_rate_period);
+	}
+	else {
+		pr_info("cave: ratelimit: disable\n");
+	}
 
 	return count;
 }
@@ -1430,11 +1433,14 @@ ssize_t syscall_rate_period_store(struct kobject *kobj, struct kobj_attribute *a
 
 	syscall_ratelimit_clear();
 	syscall_rate_period = time;
-	if (syscall_rate_limit && syscall_rate_period)
+	if (syscall_rate_limit && syscall_rate_period) {
 		syscall_ratelimit_init();
-	else
-		pr_info("cave: ratelimit: disable (limit=%u, period=%d)\n",
+		pr_info("cave: ratelimit: enable (limit=%u, period=%d)\n",
                         syscall_rate_limit, syscall_rate_period);
+	}
+	else {
+		pr_info("cave: ratelimit: disable\n");
+	}
 
 	return count;
 }
