@@ -22,6 +22,8 @@ static struct kobject *syscall_enabled_kobj;
 static volatile struct cave_context cave_syscall_context __read_mostly = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
 #endif
 
+static bool cave_nowait __read_mostly = false;
+
 enum reason {
 	ENTRY = 0,
 	EXIT,
@@ -534,6 +536,9 @@ static inline void wait_curr_voffset(long new_voffset)
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
 #endif
 
+	if (cave_nowait)
+		return;
+
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 	if (new_voffset >= curr_voffset)
 		return;
@@ -556,6 +561,9 @@ static inline void wait_target_voffset(long new_voffset)
 	unsigned long long start;
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
 #endif
+
+	if (cave_nowait)
+		return;
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 	start = rdtsc();
@@ -698,6 +706,9 @@ static inline void wait_target_voffset(long new_voffset)
 	unsigned long long start;
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
 #endif
+
+	if (cave_nowait)
+		return;
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 	start = rdtsc();
@@ -1503,6 +1514,8 @@ ssize_t ctl_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	// kfree(s);
 #endif
 
+	ret += sprintf(buf, "nowait=%s\n", cave_nowait ? "true" : "false");
+
 	return ret;
 }
 
@@ -1556,6 +1569,21 @@ ssize_t ctl_store(struct kobject *kobj, struct kobj_attribute *attr,
 		return count;
 	}
 #endif
+
+	if (strncmp(buf, "nowait:true", 11) == 0) {
+		if (!cave_nowait) {
+			cave_nowait = true;
+			pr_info("cave: nowait = true\n");
+		}
+		return count;
+	}
+	else if (strncmp(buf, "nowait:false", 12) == 0) {
+		if (cave_nowait) {
+			cave_nowait = false;
+			pr_info("cave: nowait = false\n");
+		}
+		return count;
+	}
 
 	return count;
 }
