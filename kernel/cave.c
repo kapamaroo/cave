@@ -22,6 +22,8 @@ static struct kobject *syscall_enabled_kobj;
 static volatile struct cave_context cave_syscall_context __read_mostly = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
 #endif
 
+static bool cave_nowait __read_mostly = false;
+
 enum reason {
 	ENTRY = 0,
 	EXIT,
@@ -141,7 +143,7 @@ static void syscall_ratelimit_init(void)
 		p->enabled = 1;
 
                 INIT_DEFERRABLE_WORK(&p->dwork, syscall_rate_work);
-                schedule_delayed_work_on(i, &per_cpu_ptr(&srl, i)->dwork,
+                schedule_delayed_work_on(i, &p->dwork,
                                          msecs_to_jiffies(syscall_rate_period));
 	}
 }
@@ -153,6 +155,8 @@ static void syscall_ratelimit_clear(void)
 	for_each_online_cpu(i) {
 		struct syscall_ratelimit *p = per_cpu_ptr(&srl, i);
                 cancel_delayed_work_sync(&p->dwork);
+		p->counter = 0;
+		p->enabled = 1;
         }
 }
 #else
@@ -530,7 +534,12 @@ static inline void wait_curr_voffset(long new_voffset)
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 	unsigned long long start;
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
+#endif
 
+	if (cave_nowait)
+		return;
+
+#ifdef CONFIG_UNISERVER_CAVE_STATS
 	if (new_voffset >= curr_voffset)
 		return;
 
@@ -551,7 +560,12 @@ static inline void wait_target_voffset(long new_voffset)
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 	unsigned long long start;
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
+#endif
 
+	if (cave_nowait)
+		return;
+
+#ifdef CONFIG_UNISERVER_CAVE_STATS
 	start = rdtsc();
 #endif
 
@@ -691,7 +705,12 @@ static inline void wait_target_voffset(long new_voffset)
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 	unsigned long long start;
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
+#endif
 
+	if (cave_nowait)
+		return;
+
+#ifdef CONFIG_UNISERVER_CAVE_STATS
 	start = rdtsc();
 #endif
 
@@ -1377,7 +1396,6 @@ static
 ssize_t syscall_rate_limit_store(struct kobject *kobj, struct kobj_attribute *attr,
                                  const char *buf, size_t count)
 {
-	unsigned long flags;
 	unsigned int limit;
 	int err;
 
@@ -1387,14 +1405,16 @@ ssize_t syscall_rate_limit_store(struct kobject *kobj, struct kobj_attribute *at
 		return count;
 	}
 
-	cave_lock(flags);
-
-	if (cave_enabled)
-		pr_warn("cave: must be disabled to change syscall rate limit\n");
-	else
-		syscall_rate_limit = limit;
-
-	cave_unlock(flags);
+	syscall_ratelimit_clear();
+	syscall_rate_limit = limit;
+	if (syscall_rate_limit && syscall_rate_period) {
+		syscall_ratelimit_init();
+		pr_info("cave: ratelimit: enable (limit=%u, period=%d)\n",
+                        syscall_rate_limit, syscall_rate_period);
+	}
+	else {
+		pr_info("cave: ratelimit: disable\n");
+	}
 
 	return count;
 }
@@ -1413,7 +1433,6 @@ static
 ssize_t syscall_rate_period_store(struct kobject *kobj, struct kobj_attribute *attr,
                                   const char *buf, size_t count)
 {
-	unsigned long flags;
 	unsigned int time;
 	int err;
 
@@ -1423,14 +1442,16 @@ ssize_t syscall_rate_period_store(struct kobject *kobj, struct kobj_attribute *a
 		return count;
 	}
 
-	cave_lock(flags);
-
-	if (cave_enabled)
-		pr_warn("cave: must be disabled to change syscall rate period\n");
-	else
-		syscall_rate_period = time;
-
-	cave_unlock(flags);
+	syscall_ratelimit_clear();
+	syscall_rate_period = time;
+	if (syscall_rate_limit && syscall_rate_period) {
+		syscall_ratelimit_init();
+		pr_info("cave: ratelimit: enable (limit=%u, period=%d)\n",
+                        syscall_rate_limit, syscall_rate_period);
+	}
+	else {
+		pr_info("cave: ratelimit: disable\n");
+	}
 
 	return count;
 }
@@ -1493,6 +1514,8 @@ ssize_t ctl_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 	// kfree(s);
 #endif
 
+	ret += sprintf(buf, "nowait=%s\n", cave_nowait ? "true" : "false");
+
 	return ret;
 }
 
@@ -1517,11 +1540,13 @@ ssize_t ctl_store(struct kobject *kobj, struct kobj_attribute *attr,
 		}
 
 		ret = bitmap_parselist(buf + 15, tmp, __NR_syscall_max);
-		if (ret == 0) {
-			bitmap_or(syscall_enabled,
-				  syscall_enabled, tmp, __NR_syscall_max);
+                if (ret) {
+			pr_warn("cave: ctl: invalid bitmap parselist\n");
 			return count;
 		}
+
+		bitmap_or(syscall_enabled, syscall_enabled, tmp, __NR_syscall_max);
+		return count;
 	}
 	else if (strncmp(buf, "syscall:disable:", 16) == 0) {
 		if (strncmp(buf + 16, "all", 3) == 0 && buf[19] == '\n') {
@@ -1535,15 +1560,30 @@ ssize_t ctl_store(struct kobject *kobj, struct kobj_attribute *attr,
 		}
 
 		ret = bitmap_parselist(buf + 16, tmp, __NR_syscall_max);
-		if (ret == 0) {
-			bitmap_andnot(syscall_enabled,
-				      syscall_enabled, tmp, __NR_syscall_max);
+                if (ret) {
+			pr_warn("cave: ctl: invalid bitmap parselist\n");
 			return count;
 		}
-	}
 
-	pr_warn("cave: ctl: invalid bitmap parselist\n");
+		bitmap_andnot(syscall_enabled, syscall_enabled, tmp, __NR_syscall_max);
+		return count;
+	}
 #endif
+
+	if (strncmp(buf, "nowait:true", 11) == 0) {
+		if (!cave_nowait) {
+			cave_nowait = true;
+			pr_info("cave: nowait = true\n");
+		}
+		return count;
+	}
+	else if (strncmp(buf, "nowait:false", 12) == 0) {
+		if (cave_nowait) {
+			cave_nowait = false;
+			pr_info("cave: nowait = false\n");
+		}
+		return count;
+	}
 
 	return count;
 }
