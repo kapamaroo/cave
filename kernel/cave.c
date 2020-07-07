@@ -1518,11 +1518,13 @@ ssize_t ctl_store(struct kobject *kobj, struct kobj_attribute *attr,
 		}
 
 		ret = bitmap_parselist(buf + 15, tmp, __NR_syscall_max);
-		if (ret == 0) {
-			bitmap_or(syscall_enabled,
-				  syscall_enabled, tmp, __NR_syscall_max);
+                if (ret) {
+			pr_warn("cave: ctl: invalid bitmap parselist\n");
 			return count;
 		}
+
+		bitmap_or(syscall_enabled, syscall_enabled, tmp, __NR_syscall_max);
+		return count;
 	}
 	else if (strncmp(buf, "syscall:disable:", 16) == 0) {
 		if (strncmp(buf + 16, "all", 3) == 0 && buf[19] == '\n') {
@@ -1536,14 +1538,14 @@ ssize_t ctl_store(struct kobject *kobj, struct kobj_attribute *attr,
 		}
 
 		ret = bitmap_parselist(buf + 16, tmp, __NR_syscall_max);
-		if (ret == 0) {
-			bitmap_andnot(syscall_enabled,
-				      syscall_enabled, tmp, __NR_syscall_max);
+                if (ret) {
+			pr_warn("cave: ctl: invalid bitmap parselist\n");
 			return count;
 		}
-	}
 
-	pr_warn("cave: ctl: invalid bitmap parselist\n");
+		bitmap_andnot(syscall_enabled, syscall_enabled, tmp, __NR_syscall_max);
+		return count;
+	}
 #endif
 
 	return count;
