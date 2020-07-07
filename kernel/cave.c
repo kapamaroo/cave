@@ -757,7 +757,10 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
          * Any changes regarding rate limit take effect on the exit path and
          * affect the next entry point.
          */
-	p->counter++;
+
+	/* track cave tasks */
+	if (current->cave_data.skip_default_user_context)
+		p->counter++;
 
         if (unlikely(!p->enabled))
 		return;
