@@ -90,7 +90,7 @@ struct syscall_ratelimit {
 
 DEFINE_PER_CPU(struct syscall_ratelimit, srl);
 
-static unsigned int syscall_rate_period = MSEC_PER_SEC;
+static unsigned int syscall_rate_period = MSEC_PER_SEC / 10;
 static unsigned int syscall_rate_limit = 1000;
 static bool cave_ratelimit __read_mostly = false;
 
