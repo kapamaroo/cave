@@ -86,16 +86,18 @@ enum cave_switch_case {
 struct syscall_ratelimit {
     unsigned int counter;
     int enabled;
-    struct delayed_work dwork;
 };
 
 DEFINE_PER_CPU(struct syscall_ratelimit, srl);
 
 static unsigned int syscall_rate_period = MSEC_PER_SEC;
 static unsigned int syscall_rate_limit = 1000;
-static bool cave_ratelimit __read_mostly = true;
+static bool cave_ratelimit __read_mostly = false;
 
-static inline void __syscall_rate_work(struct syscall_ratelimit *p)
+static struct hrtimer ratelimit_hrtimer;
+static ktime_t ratelimit_period_time;
+
+static inline int __syscall_rate_work(struct syscall_ratelimit *p)
 {
         unsigned int rate = p->counter * (MSEC_PER_SEC / syscall_rate_period);
         int enabled = p->enabled;
@@ -110,28 +112,39 @@ static inline void __syscall_rate_work(struct syscall_ratelimit *p)
                          */
 			p->enabled = -1;
 
-			pr_warn("cave: syscall rate inc: cpu%d %u (limit=%u / sec, period=%u ms)\n",
-				smp_processor_id(), rate, syscall_rate_limit, syscall_rate_period);
+			return rate;
                 }
         }
         else {
 		if (enabled <= 0) {
 			p->enabled = 1;
 
-			pr_warn("cave: syscall rate dec: cpu%d %u (limit=%u / sec, period=%u ms)\n",
-				smp_processor_id(), rate, syscall_rate_limit, syscall_rate_period);
+			return -1;
                 }
         }
+
+	return 0;
 }
 
-static void syscall_rate_work(struct work_struct *work)
+static enum hrtimer_restart ratelimit_work(struct hrtimer *timer)
 {
-    struct delayed_work *dwork = to_delayed_work(work);
+	int i;
 
-    __syscall_rate_work(this_cpu_ptr(&srl));
+	for_each_online_cpu(i) {
+		struct syscall_ratelimit *p = per_cpu_ptr(&srl, i);
+		int rate = __syscall_rate_work(p);
 
-    schedule_delayed_work_on(smp_processor_id(), dwork,
-                             msecs_to_jiffies(syscall_rate_period));
+		if (rate > 0)
+			pr_warn("cave: syscall rate inc: cpu%d %u (limit=%u / sec, period=%u ms)\n",
+				i, rate, syscall_rate_limit, syscall_rate_period);
+		else if (rate < 0)
+			pr_warn("cave: syscall rate dec: cpu%d (limit=%u / sec, period=%u ms)\n",
+				i, syscall_rate_limit, syscall_rate_period);
+	}
+
+	hrtimer_forward_now(&ratelimit_hrtimer, ratelimit_period_time);
+
+	return HRTIMER_RESTART;
 }
 
 static void syscall_ratelimit_init(void)
@@ -145,11 +158,12 @@ static void syscall_ratelimit_init(void)
 		struct syscall_ratelimit *p = per_cpu_ptr(&srl, i);
 		p->counter = 0;
 		p->enabled = 1;
-
-                INIT_DEFERRABLE_WORK(&p->dwork, syscall_rate_work);
-                schedule_delayed_work_on(i, &p->dwork,
-                                         msecs_to_jiffies(syscall_rate_period));
 	}
+
+	ratelimit_period_time = ms_to_ktime(syscall_rate_period);
+	hrtimer_init(&ratelimit_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	ratelimit_hrtimer.function = ratelimit_work;
+	hrtimer_start(&ratelimit_hrtimer, ratelimit_period_time, HRTIMER_MODE_REL);
 
 	pr_info("cave: ratelimit: enable (limit=%u, period=%d)\n",
 		syscall_rate_limit, syscall_rate_period);
@@ -162,9 +176,10 @@ static void syscall_ratelimit_clear(void)
 	if (!cave_ratelimit)
 		return;
 
+	hrtimer_cancel(&ratelimit_hrtimer);
+
 	for_each_online_cpu(i) {
 		struct syscall_ratelimit *p = per_cpu_ptr(&srl, i);
-                cancel_delayed_work_sync(&p->dwork);
 		p->counter = 0;
 		p->enabled = 1;
         }
@@ -1446,6 +1461,7 @@ ssize_t syscall_rate_period_store(struct kobject *kobj, struct kobj_attribute *a
 	}
 
 	syscall_rate_period = time;
+	ratelimit_period_time = ms_to_ktime(syscall_rate_period);
 
 	return count;
 }
