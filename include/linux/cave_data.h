@@ -1,7 +1,7 @@
 #ifndef INCLUDE_LINUX_CAVE_DATA_H_
 #define INCLUDE_LINUX_CAVE_DATA_H_
 
-#ifdef CONFIG_UNISERVER_CAVE
+#ifdef CONFIG_CAVE
 
 struct cave_context {
 	long voffset;

@@ -517,7 +517,7 @@ struct task_struct {
 	int				normal_prio;
 	unsigned int			rt_priority;
 
-#ifdef CONFIG_UNISERVER_CAVE
+#ifdef CONFIG_CAVE
 	cave_data_t			cave_data;
 #endif
 

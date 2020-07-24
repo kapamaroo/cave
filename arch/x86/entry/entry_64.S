@@ -97,20 +97,20 @@ ENDPROC(native_usergs_sysret64)
 #endif
 
 .macro ENTRY_HOOK
-#ifdef CONFIG_UNISERVER_CAVE
+#ifdef CONFIG_CAVE
 	call	cave_entry_switch
         RESTORE_C_REGS
 #endif
 .endm
 
 .macro ENTRY_HOOK_NORESTORE
-#ifdef CONFIG_UNISERVER_CAVE
+#ifdef CONFIG_CAVE
 	call	cave_entry_switch
 #endif
 .endm
 
 .macro ENTRY_HOOK_SYSCALL
-#ifdef CONFIG_UNISERVER_CAVE
+#ifdef CONFIG_CAVE
 	movq	%rax, %rdi
 	call	cave_syscall_entry_switch
         RESTORE_C_REGS_EXCEPT_RAX
@@ -119,13 +119,13 @@ ENDPROC(native_usergs_sysret64)
 .endm
 
 .macro EXIT_HOOK
-#ifdef CONFIG_UNISERVER_CAVE
+#ifdef CONFIG_CAVE
 	call	cave_exit_switch
 #endif
 .endm
 
 .macro EXIT_HOOK_SYSCALL
-#ifdef CONFIG_UNISERVER_CAVE
+#ifdef CONFIG_CAVE
 	call	cave_syscall_exit_switch
 #endif
 .endm

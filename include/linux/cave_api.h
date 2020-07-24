@@ -3,7 +3,7 @@
 
 struct task_struct;
 
-#ifdef CONFIG_UNISERVER_CAVE
+#ifdef CONFIG_CAVE
 
 void cave_exec_task(struct task_struct *p);
 

@@ -10,4 +10,4 @@ config SRCARCH
 
 source "arch/$SRCARCH/Kconfig"
 
-source "Kconfig.uniserver"
+source "Kconfig.cave"

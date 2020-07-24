@@ -340,7 +340,7 @@
 331	common	pkey_free		sys_pkey_free
 332	common	statx			sys_statx
 
-400	common	uniserver_ctl		sys_uniserver_ctl
+400	common	cave_ctl		sys_cave_ctl
 
 #
 # x32-specific system call numbers start at 512 to avoid cache impact

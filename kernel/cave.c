@@ -15,7 +15,7 @@
 
 static volatile int cave_enabled = 0;
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 static volatile int cave_syscall_context_enabled = 0;
 DECLARE_BITMAP(syscall_enabled, __NR_syscall_max);
 static struct kobject *syscall_enabled_kobj;
@@ -32,7 +32,7 @@ enum reason {
 	CONTEXT_SWITCH
 };
 
-#ifdef CONFIG_UNISERVER_CAVE_MSR_VOLTAGE
+#ifdef CONFIG_CAVE_MSR_VOLTAGE
 DEFINE_PER_CPU(unsigned long, syscall_num);
 
 static u64 read_voltage(void)
@@ -74,7 +74,7 @@ enum cave_switch_case {
 	CAVE_INC = 0,
 	CAVE_DEC,
 	SKIP_FAST,
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
 	SKIP_SLOW,
 	SKIP_REPLAY,
 	SKIP_RACE,
@@ -82,7 +82,7 @@ enum cave_switch_case {
 	CAVE_SWITCH_CASES
 };
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+#ifdef CONFIG_CAVE_SYSCALL_RATELIMIT
 struct syscall_ratelimit {
     unsigned int counter;
     int enabled;
@@ -196,9 +196,9 @@ static void syscall_ratelimit_clear(void)
 }
 #endif
 
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
 enum cave_lock_case {
 	LOCK_INC = 0,
 	LOCK_DEC,
@@ -210,7 +210,7 @@ enum cave_lock_case {
 
 enum cave_wait_cases {
 	WAIT_TARGET = 0,
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
 	WAIT_CURR,
 #endif
 	CAVE_WAIT_CASES
@@ -226,7 +226,7 @@ static char *cave_stat_name[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASE
 	__stringify(CAVE_INC),
 	__stringify(CAVE_DEC),
 	__stringify(SKIP_FAST),
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
 	__stringify(SKIP_SLOW),
 	__stringify(SKIP_REPLAY),
 	__stringify(SKIP_RACE),
@@ -236,7 +236,7 @@ static char *cave_stat_name[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASE
 
 #endif
 	__stringify(WAIT_TARGET),
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
 	__stringify(WAIT_CURR)
 #endif
 };
@@ -247,7 +247,7 @@ static inline unsigned long long start_measure(const enum reason reason)
 {
 	unsigned long long ret;
 
-#ifdef CONFIG_UNISERVER_CAVE_MSR_VOLTAGE
+#ifdef CONFIG_CAVE_MSR_VOLTAGE
 	if (reason == EXIT_SYSCALL) {
 		unsigned long syscall_nr = this_cpu_read(syscall_num);
 
@@ -274,7 +274,7 @@ static inline void _end_measure(unsigned long long start, enum cave_switch_case 
 	t->counter[c]++;
 }
 
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
 static inline void _end_lock_measure(unsigned long long start, enum cave_lock_case c)
 {
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
@@ -295,11 +295,11 @@ static inline void _end_lock_measure(unsigned long long start, enum cave_lock_ca
 
 static struct kobject *cave_kobj;
 
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
 static DEFINE_SPINLOCK(cave_lock);
 
 #define _cave_lock_1(flags)	spin_lock_irqsave(&cave_lock, flags)
-#ifndef CONFIG_UNISERVER_CAVE_STATS
+#ifndef CONFIG_CAVE_STATS
 #define _cave_lock_2(flags, lock_case)	spin_lock_irqsave(&cave_lock, flags)
 #define _cave_lock_3(flags, lock_case, start)	spin_lock_irqsave(&cave_lock, flags)
 #else
@@ -342,17 +342,17 @@ static volatile struct cave_context cave_user_context __read_mostly = CAVE_CONTE
 
 DEFINE_PER_CPU(struct cave_context, context) = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
 
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
 static volatile long target_voffset_cached = CAVE_NOMINAL_VOFFSET;
 static volatile long curr_voffset = CAVE_NOMINAL_VOFFSET;
 #endif
 
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 static DEFINE_SPINLOCK(cave_stat_avg_lock);
 static struct cave_stats cave_stat_avg[4];
 static int stat_samples[3] = { 0, 0, 0 };
 
-#ifdef CONFIG_UNISERVER_CAVE_SKIP_MSR
+#ifdef CONFIG_CAVE_SKIP_MSR
 static bool skip_msr __read_mostly = false;
 #endif
 
@@ -412,7 +412,7 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 		d.time[x] = (d.time[x] * (n) + s.time[x]) / ((n) + 1);	\
 	} while (0)
 
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
 #define RUNNING_AVG_STAT(d, s, n, l)					\
 	do {								\
 		if (n == l)						\
@@ -504,7 +504,7 @@ static void stats_clear(void)
 
 static inline void write_voffset_msr(u64 voffset)
 {
-#ifdef CONFIG_UNISERVER_CAVE_SKIP_MSR
+#ifdef CONFIG_CAVE_SKIP_MSR
 	if (unlikely(skip_msr))
 		return;
 #endif
@@ -517,9 +517,9 @@ static inline u64 read_voffset_msr(void)
 {
 	u64 voffset;
 
-#ifdef CONFIG_UNISERVER_CAVE_SKIP_MSR
+#ifdef CONFIG_CAVE_SKIP_MSR
 	if (unlikely(skip_msr))
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
 		return target_voffset_cached;
 #else
 		return this_cpu_read(context).voffset;
@@ -534,7 +534,7 @@ static inline u64 read_voffset_msr(void)
 
 /* ************************************************************************** */
 
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
 static void write_target_voffset(long new_voffset)
 {
 	target_voffset_cached = new_voffset;
@@ -559,7 +559,7 @@ static long read_target_voffset(void)
 
 static inline void wait_curr_voffset(long new_voffset)
 {
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 	unsigned long long start;
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
 #endif
@@ -567,7 +567,7 @@ static inline void wait_curr_voffset(long new_voffset)
 	if (cave_nowait)
 		return;
 
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 	if (new_voffset >= curr_voffset)
 		return;
 
@@ -577,7 +577,7 @@ static inline void wait_curr_voffset(long new_voffset)
 	while (new_voffset < curr_voffset)
 		cpu_relax();
 
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 	t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR] += rdtsc() - start;
 	t->counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR]++;
 #endif
@@ -585,7 +585,7 @@ static inline void wait_curr_voffset(long new_voffset)
 
 static inline void wait_target_voffset(long new_voffset)
 {
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 	unsigned long long start;
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
 #endif
@@ -593,14 +593,14 @@ static inline void wait_target_voffset(long new_voffset)
 	if (cave_nowait)
 		return;
 
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 	start = rdtsc();
 #endif
 
 	while (new_voffset < (curr_voffset = read_voffset_msr()))
 		cpu_relax();
 
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 	t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET] += rdtsc() - start;
 	t->counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET]++;
 #endif
@@ -630,7 +630,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	long selected_voffset;
 	static int switch_path_contention = 0;
 
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 	unsigned long long start;
 #endif
 
@@ -640,7 +640,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	if (next_ctx->voffset == this_cpu_read(context).voffset)
 		return;
 
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 	start = start_measure(reason);
 #endif
 
@@ -730,7 +730,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 #else
 static inline void wait_target_voffset(long new_voffset)
 {
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 	unsigned long long start;
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
 #endif
@@ -738,14 +738,14 @@ static inline void wait_target_voffset(long new_voffset)
 	if (cave_nowait)
 		return;
 
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 	start = rdtsc();
 #endif
 
 	while (new_voffset < read_voffset_msr())
 		cpu_relax();
 
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 	t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET] += rdtsc() - start;
 	t->counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET]++;
 #endif
@@ -757,7 +757,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	long target_voffset = this_cpu_read(context).voffset;
 	long new_voffset = next_ctx->voffset;
 
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 	unsigned long long start;
 	start = start_measure(reason);
 #endif
@@ -788,18 +788,18 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 {
 	volatile struct cave_context *context = &cave_kernel_context;
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+#ifdef CONFIG_CAVE_SYSCALL_RATELIMIT
         struct syscall_ratelimit *p = this_cpu_ptr(&srl);
 #endif
 
 	if (!cave_enabled)
 		return;
 
-#ifdef CONFIG_UNISERVER_CAVE_MSR_VOLTAGE
+#ifdef CONFIG_CAVE_MSR_VOLTAGE
 	this_cpu_write(syscall_num, syscall_nr);
 #endif
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+#ifdef CONFIG_CAVE_SYSCALL_RATELIMIT
         /*
          * Any changes regarding rate limit take effect on the exit path and
          * affect the next entry point.
@@ -815,13 +815,13 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
         if (unlikely(p->enabled < 0)) {
 		p->enabled = 0;
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 		goto skip_syscall_context;
 #endif
         }
 #endif
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 	if (cave_syscall_context_enabled && test_bit(syscall_nr, syscall_enabled))
 		context = &cave_syscall_context;
 
@@ -840,12 +840,12 @@ __visible void cave_entry_switch(void)
 	if (!cave_enabled)
 		return;
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+#ifdef CONFIG_CAVE_SYSCALL_RATELIMIT
 	if (this_cpu_ptr(&srl)->enabled <= 0)
 		return;
 #endif
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 	current->cave_data.kernel_ctx = *context;
 #endif
 	_cave_switch(context, ENTRY);
@@ -863,7 +863,7 @@ __visible void cave_exit_switch(void)
 	if (!cave_enabled)
 		return;
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+#ifdef CONFIG_CAVE_SYSCALL_RATELIMIT
 	if (this_cpu_ptr(&srl)->enabled <= 0)
 		return;
 #endif
@@ -878,7 +878,7 @@ __visible void cave_syscall_exit_switch(void)
 	if (!cave_enabled)
 		return;
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+#ifdef CONFIG_CAVE_SYSCALL_RATELIMIT
 	if (this_cpu_ptr(&srl)->enabled <= 0)
 		return;
 #endif
@@ -919,7 +919,7 @@ void cave_fork_init(struct task_struct *p)
 	spin_lock_init(&p->cave_data.lock);
 
 	if (!p->cave_data.skip_default_user_context) {
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 		p->cave_data.kernel_ctx = cave_kernel_context;
 #endif
 		p->cave_data.user_ctx = cave_user_context;
@@ -946,7 +946,7 @@ void cave_context_switch_voltage(struct task_struct *prev, struct task_struct *n
 	 * irq from kernel, syscall slowpath.
 	 */
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 	_cave_switch(next_ctx, CONTEXT_SWITCH);
 #else
 	if (unlikely(is_idle_task(next)))
@@ -974,7 +974,7 @@ static void cave_apply_tasks(void)
 #endif
 	for_each_process_thread(g, p) {
 		spin_lock_irqsave(&p->cave_data.lock, flags);
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 		p->cave_data.kernel_ctx = cave_kernel_context;
 #endif
 		if (!p->cave_data.skip_default_user_context)
@@ -983,7 +983,7 @@ static void cave_apply_tasks(void)
 	}
 }
 
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 static int _print_cave_stats(char *buf, struct cave_stats *t, const int t_min)
 {
 	int ret = 0;
@@ -1040,7 +1040,7 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, const int t_min)
 			       S(t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET], t->time[CAVE_INC]));
 	}
 
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
 	if (time && time != t->time[CAVE_INC]) {
 		ret += sprintf(buf + ret, "wait_curr/eq_dec " FMT "\n",
 			       S(t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR], time - t->time[CAVE_INC]));
@@ -1144,7 +1144,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 		struct cave_context nominal = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
 		cave_lock(flags);
 		cave_enabled = 0;
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 		cave_syscall_context_enabled = 0;
 #endif
 		syscall_ratelimit_clear();
@@ -1184,7 +1184,7 @@ ssize_t max_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 	cave_lock(flags);
 	if (voffset < cave_kernel_context.voffset)
 		pr_warn("cave: new value of max_voffset less than kernel voffset\n");
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 	else if (voffset < cave_syscall_context.voffset)
 		pr_warn("cave: new value of max_voffset less than syscall voffset\n");
 #endif
@@ -1196,7 +1196,7 @@ ssize_t max_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 	return count;
 }
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 static
 ssize_t enable_syscall_voffset_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -1274,7 +1274,7 @@ ssize_t kernel_voffset_store(struct kobject *kobj, struct kobj_attribute *attr,
 	return count;
 }
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 static
 ssize_t syscall_voffset_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -1358,7 +1358,7 @@ ssize_t userspace_voffset_store(struct kobject *kobj, struct kobj_attribute *att
 	return count;
 }
 
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 static
 ssize_t reset_stats_store(struct kobject *kobj, struct kobj_attribute *attr,
 			  const char *buf, size_t count)
@@ -1392,7 +1392,7 @@ ssize_t voltage_show(struct kobject *kobj, struct kobj_attribute *attr, char *bu
 	int ret = 0;
 	long voffset;
 
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
 	unsigned long flags;
 
 	cave_lock(flags);
@@ -1407,7 +1407,7 @@ ssize_t voltage_show(struct kobject *kobj, struct kobj_attribute *attr, char *bu
 	return ret;
 }
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+#ifdef CONFIG_CAVE_SYSCALL_RATELIMIT
 static
 ssize_t syscall_rate_limit_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -1471,16 +1471,16 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	int ret = 0;
 
-#ifdef CONFIG_UNISERVER_CAVE_SKIP_MSR
+#ifdef CONFIG_CAVE_SKIP_MSR
 	ret += sprintf(buf + ret, "option:skip_msr = %s\n", skip_msr ? "true" : "false");
 #endif
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
 	ret += sprintf(buf + ret, "config:one_voltage_domain\n");
 #endif
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 	ret += sprintf(buf + ret, "config:stats\n");
 #endif
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 	ret += sprintf(buf + ret, "config:syscall\n");
 #endif
 
@@ -1491,7 +1491,7 @@ static
 ssize_t debug_store(struct kobject *kobj, struct kobj_attribute *attr,
 		    const char *buf, size_t count)
 {
-#ifdef CONFIG_UNISERVER_CAVE_SKIP_MSR
+#ifdef CONFIG_CAVE_SKIP_MSR
 	int val = 0;
 
 	sscanf(buf, "skip_msr = %d", &val);
@@ -1509,7 +1509,7 @@ ssize_t ctl_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	int ret = 0;
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 	static char *s = (void *)-1;
 
 	if (s == (void *)-1)
@@ -1524,7 +1524,7 @@ ssize_t ctl_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 #endif
 
 	ret += sprintf(buf + ret, "nowait=%s\n", cave_nowait ? "true" : "false");
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+#ifdef CONFIG_CAVE_SYSCALL_RATELIMIT
 	ret += sprintf(buf + ret, "ratelimit=%s\n", cave_ratelimit ? "true" : "false");
 #endif
 
@@ -1535,7 +1535,7 @@ static
 ssize_t ctl_store(struct kobject *kobj, struct kobj_attribute *attr,
 		  const char *buf, size_t count)
 {
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 	int ret = 0;
 
 	DECLARE_BITMAP(tmp, __NR_syscall_max);
@@ -1597,7 +1597,7 @@ ssize_t ctl_store(struct kobject *kobj, struct kobj_attribute *attr,
 		return count;
 	}
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+#ifdef CONFIG_CAVE_SYSCALL_RATELIMIT
 	if (strncmp(buf, "ratelimit:true", 14) == 0) {
 		if (!cave_ratelimit) {
 			cave_ratelimit = true;
@@ -1620,26 +1620,26 @@ ssize_t ctl_store(struct kobject *kobj, struct kobj_attribute *attr,
 }
 
 KERNEL_ATTR_RW(enable);
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 KERNEL_ATTR_RO(stats);
 KERNEL_ATTR_WO(reset_stats);
 #endif
 KERNEL_ATTR_RO(voltage);
 KERNEL_ATTR_RW(max_voffset);
 KERNEL_ATTR_RW(kernel_voffset);
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 KERNEL_ATTR_RW(syscall_voffset);
 KERNEL_ATTR_RW(enable_syscall_voffset);
 #endif
 KERNEL_ATTR_RW(userspace_voffset);
 KERNEL_ATTR_RW(debug);
 KERNEL_ATTR_RW(ctl);
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+#ifdef CONFIG_CAVE_SYSCALL_RATELIMIT
 KERNEL_ATTR_RW(syscall_rate_limit);
 KERNEL_ATTR_RW(syscall_rate_period);
 #endif
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 #define HELPERS(__nr, __sys)						\
 	static								\
 	ssize_t __sys##_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf) \
@@ -1695,21 +1695,21 @@ static struct attribute_group syscall_enabled_attr_group = {
 static struct attribute_group attr_group = {
 	.attrs = (struct attribute * []) {
 		&enable_attr.attr,
-#ifdef CONFIG_UNISERVER_CAVE_STATS
+#ifdef CONFIG_CAVE_STATS
 		&reset_stats_attr.attr,
 		&stats_attr.attr,
 #endif
 		&voltage_attr.attr,
 		&max_voffset_attr.attr,
 		&kernel_voffset_attr.attr,
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 		&syscall_voffset_attr.attr,
 		&enable_syscall_voffset_attr.attr,
 #endif
 		&userspace_voffset_attr.attr,
 		&debug_attr.attr,
 		&ctl_attr.attr,
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_RATELIMIT
+#ifdef CONFIG_CAVE_SYSCALL_RATELIMIT
                 &syscall_rate_limit_attr.attr,
                 &syscall_rate_period_attr.attr,
 #endif
@@ -1729,7 +1729,7 @@ int cave_init(void)
 		return -ENOMEM;
 	}
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 	syscall_enabled_kobj = kobject_create_and_add("syscall_enabled", cave_kobj);
 	if (!syscall_enabled_kobj) {
 		pr_err("cave: failed\n");
@@ -1743,7 +1743,7 @@ int cave_init(void)
 		return err;
 	}
 
-#ifdef CONFIG_UNISERVER_CAVE_SYSCALL_CONTEXT
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 	err = sysfs_create_group(syscall_enabled_kobj, &syscall_enabled_attr_group);
 	if (err) {
 		pr_err("cave: failed\n");
@@ -1756,7 +1756,7 @@ int cave_init(void)
 	cave_lock(flags);
 
 	voffset = read_voffset_msr();
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
 	write_voffset(CAVE_NOMINAL_VOFFSET);
 #else
 	write_voffset_msr(CAVE_NOMINAL_VOFFSET);
@@ -1772,7 +1772,7 @@ late_initcall(cave_init);
 #define CAVE_SET_TASK_VOFFSET	128
 #define CAVE_LOOP		129
 
-SYSCALL_DEFINE3(uniserver_ctl, int, action, int, op1, int, op2)
+SYSCALL_DEFINE3(cave_ctl, int, action, int, op1, int, op2)
 {
 	struct task_struct *p = current;
 	long voffset;

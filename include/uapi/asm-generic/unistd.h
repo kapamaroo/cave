@@ -736,13 +736,13 @@ __SYSCALL(__NR_statx,     sys_statx)
 #undef __NR_syscalls
 #define __NR_syscalls 292
 
-#ifdef CONFIG_UNISERVER_CAVE
+#ifdef CONFIG_CAVE
 #if 400 < __NR_syscalls
-#error update uniserver system call numbers!
+#error update cave system call numbers!
 #endif
 
-#define __NR_uniserver_ctl 400
-__SYSCALL(__NR_uniserver_ctl, sys_uniserver_ctl)
+#define __NR_cave_ctl 400
+__SYSCALL(__NR_cave_ctl, sys_cave_ctl)
 
 #undef __NR_syscalls
 #define __NR_syscalls 401
