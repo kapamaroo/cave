@@ -73,8 +73,8 @@ static void log_voltage(void)
 enum cave_switch_case {
 	CAVE_INC = 0,
 	CAVE_DEC,
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 	SKIP_FAST,
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 	SKIP_SLOW,
 	SKIP_REPLAY,
 	SKIP_RACE,
@@ -225,8 +225,8 @@ struct cave_stats {
 static char *cave_stat_name[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES] = {
 	__stringify(CAVE_INC),
 	__stringify(CAVE_DEC),
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 	__stringify(SKIP_FAST),
+#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 	__stringify(SKIP_SLOW),
 	__stringify(SKIP_REPLAY),
 	__stringify(SKIP_RACE),
@@ -438,6 +438,7 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 									\
 		__RUNNING_AVG_STAT(d, s, n, CAVE_INC);			\
 		__RUNNING_AVG_STAT(d, s, n, CAVE_DEC);			\
+		__RUNNING_AVG_STAT(d, s, n, SKIP_FAST);			\
 		__RUNNING_AVG_STAT(d, s, n, CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET); \
 		n++;							\
 	} while (0)
@@ -758,17 +759,17 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 
 #ifdef CONFIG_UNISERVER_CAVE_STATS
 	unsigned long long start;
-#endif
-
-	/* This fast path works after cave_apply_tasks() completes. Until then,
-	 * it may take some time until the system transitions to cave mechanism.
-	 */
-	if (new_voffset == target_voffset)
-		return;
-
-#ifdef CONFIG_UNISERVER_CAVE_STATS
 	start = start_measure(reason);
 #endif
+
+	/*
+	 * This fast path works after cave_apply_tasks() completes. Until then,
+	 * it may take some time until the system transitions to cave mechanism.
+	 */
+	if (new_voffset == target_voffset) {
+		end_measure(start, SKIP_FAST, reason);
+		return;
+	}
 
 	this_cpu_write(context, *next_ctx);
 	write_voffset_msr(new_voffset);
@@ -1015,10 +1016,8 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, const int t_min)
 	ret += sprintf(buf + ret, "total_avg %llu 100.00 100.00\n", time / counter);
 
 	for (j = 0; j < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; j++) {
-#ifdef CONFIG_UNISERVER_CAVE_ONE_VOLTAGE_DOMAIN
 		if (j == SKIP_FAST)
 			SEPARATOR();
-#endif
 		if (j == CAVE_SWITCH_CASES || j == CAVE_SWITCH_CASES + CAVE_LOCK_CASES)
 			SEPARATOR();
 		if (t->counter[j] == 0) {
