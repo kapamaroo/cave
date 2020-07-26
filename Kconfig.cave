@@ -14,7 +14,7 @@ config CAVE_SYSCALL_RATELIMIT
         default n
         depends on CAVE
 
-config CAVE_SKIP_MSR
+config CAVE_SKIP_MSR_RW
         bool "Skip msr voltage."
         default n
 	depends on CAVE
@@ -24,12 +24,12 @@ config CAVE_SYSCALL_CONTEXT
        default n
        depends on CAVE
 
-config CAVE_ONE_VOLTAGE_DOMAIN
+config CAVE_COMMON_VOLTAGE_DOMAIN
        bool "One voltage domain for all CPUS."
        default y
        depends on CAVE
 
-config CAVE_MSR_VOLTAGE
+config CAVE_RAW_VOLTAGE_LOGGING
        bool "Measure voltage from MSR, print to trace_printk()."
        default n
        depends on CAVE_SYSCALL_CONTEXT

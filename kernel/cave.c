@@ -32,7 +32,7 @@ enum reason {
 	CONTEXT_SWITCH
 };
 
-#ifdef CONFIG_CAVE_MSR_VOLTAGE
+#ifdef CONFIG_CAVE_RAW_VOLTAGE_LOGGING
 DEFINE_PER_CPU(unsigned long, syscall_num);
 
 static u64 read_voltage(void)
@@ -74,7 +74,7 @@ enum cave_switch_case {
 	CAVE_INC = 0,
 	CAVE_DEC,
 	SKIP_FAST,
-#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 	SKIP_SLOW,
 	SKIP_REPLAY,
 	SKIP_RACE,
@@ -198,7 +198,7 @@ static void syscall_ratelimit_clear(void)
 
 #ifdef CONFIG_CAVE_STATS
 
-#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 enum cave_lock_case {
 	LOCK_INC = 0,
 	LOCK_DEC,
@@ -210,7 +210,7 @@ enum cave_lock_case {
 
 enum cave_wait_cases {
 	WAIT_TARGET = 0,
-#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 	WAIT_CURR,
 #endif
 	CAVE_WAIT_CASES
@@ -226,7 +226,7 @@ static char *cave_stat_name[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASE
 	__stringify(CAVE_INC),
 	__stringify(CAVE_DEC),
 	__stringify(SKIP_FAST),
-#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 	__stringify(SKIP_SLOW),
 	__stringify(SKIP_REPLAY),
 	__stringify(SKIP_RACE),
@@ -236,7 +236,7 @@ static char *cave_stat_name[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASE
 
 #endif
 	__stringify(WAIT_TARGET),
-#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 	__stringify(WAIT_CURR)
 #endif
 };
@@ -247,7 +247,7 @@ static inline unsigned long long start_measure(const enum reason reason)
 {
 	unsigned long long ret;
 
-#ifdef CONFIG_CAVE_MSR_VOLTAGE
+#ifdef CONFIG_CAVE_RAW_VOLTAGE_LOGGING
 	if (reason == EXIT_SYSCALL) {
 		unsigned long syscall_nr = this_cpu_read(syscall_num);
 
@@ -274,7 +274,7 @@ static inline void _end_measure(unsigned long long start, enum cave_switch_case 
 	t->counter[c]++;
 }
 
-#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 static inline void _end_lock_measure(unsigned long long start, enum cave_lock_case c)
 {
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
@@ -295,7 +295,7 @@ static inline void _end_lock_measure(unsigned long long start, enum cave_lock_ca
 
 static struct kobject *cave_kobj;
 
-#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 static DEFINE_SPINLOCK(cave_lock);
 
 #define _cave_lock_1(flags)	spin_lock_irqsave(&cave_lock, flags)
@@ -342,7 +342,7 @@ static volatile struct cave_context cave_user_context __read_mostly = CAVE_CONTE
 
 DEFINE_PER_CPU(struct cave_context, context) = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
 
-#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 static volatile long target_voffset_cached = CAVE_NOMINAL_VOFFSET;
 static volatile long curr_voffset = CAVE_NOMINAL_VOFFSET;
 #endif
@@ -352,7 +352,7 @@ static DEFINE_SPINLOCK(cave_stat_avg_lock);
 static struct cave_stats cave_stat_avg[4];
 static int stat_samples[3] = { 0, 0, 0 };
 
-#ifdef CONFIG_CAVE_SKIP_MSR
+#ifdef CONFIG_CAVE_SKIP_MSR_RW
 static bool skip_msr __read_mostly = false;
 #endif
 
@@ -412,7 +412,7 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 		d.time[x] = (d.time[x] * (n) + s.time[x]) / ((n) + 1);	\
 	} while (0)
 
-#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 #define RUNNING_AVG_STAT(d, s, n, l)					\
 	do {								\
 		if (n == l)						\
@@ -504,7 +504,7 @@ static void stats_clear(void)
 
 static inline void write_voffset_msr(u64 voffset)
 {
-#ifdef CONFIG_CAVE_SKIP_MSR
+#ifdef CONFIG_CAVE_SKIP_MSR_RW
 	if (unlikely(skip_msr))
 		return;
 #endif
@@ -517,9 +517,9 @@ static inline u64 read_voffset_msr(void)
 {
 	u64 voffset;
 
-#ifdef CONFIG_CAVE_SKIP_MSR
+#ifdef CONFIG_CAVE_SKIP_MSR_RW
 	if (unlikely(skip_msr))
-#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 		return target_voffset_cached;
 #else
 		return this_cpu_read(context).voffset;
@@ -534,7 +534,7 @@ static inline u64 read_voffset_msr(void)
 
 /* ************************************************************************** */
 
-#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 static void write_target_voffset(long new_voffset)
 {
 	target_voffset_cached = new_voffset;
@@ -795,7 +795,7 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 	if (!cave_enabled)
 		return;
 
-#ifdef CONFIG_CAVE_MSR_VOLTAGE
+#ifdef CONFIG_CAVE_RAW_VOLTAGE_LOGGING
 	this_cpu_write(syscall_num, syscall_nr);
 #endif
 
@@ -1040,7 +1040,7 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, const int t_min)
 			       S(t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET], t->time[CAVE_INC]));
 	}
 
-#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 	if (time && time != t->time[CAVE_INC]) {
 		ret += sprintf(buf + ret, "wait_curr/eq_dec " FMT "\n",
 			       S(t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR], time - t->time[CAVE_INC]));
@@ -1392,7 +1392,7 @@ ssize_t voltage_show(struct kobject *kobj, struct kobj_attribute *attr, char *bu
 	int ret = 0;
 	long voffset;
 
-#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 	unsigned long flags;
 
 	cave_lock(flags);
@@ -1471,10 +1471,10 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	int ret = 0;
 
-#ifdef CONFIG_CAVE_SKIP_MSR
+#ifdef CONFIG_CAVE_SKIP_MSR_RW
 	ret += sprintf(buf + ret, "option:skip_msr = %s\n", skip_msr ? "true" : "false");
 #endif
-#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 	ret += sprintf(buf + ret, "config:one_voltage_domain\n");
 #endif
 #ifdef CONFIG_CAVE_STATS
@@ -1491,7 +1491,7 @@ static
 ssize_t debug_store(struct kobject *kobj, struct kobj_attribute *attr,
 		    const char *buf, size_t count)
 {
-#ifdef CONFIG_CAVE_SKIP_MSR
+#ifdef CONFIG_CAVE_SKIP_MSR_RW
 	int val = 0;
 
 	sscanf(buf, "skip_msr = %d", &val);
@@ -1756,7 +1756,7 @@ int cave_init(void)
 	cave_lock(flags);
 
 	voffset = read_voffset_msr();
-#ifdef CONFIG_CAVE_ONE_VOLTAGE_DOMAIN
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 	write_voffset(CAVE_NOMINAL_VOFFSET);
 #else
 	write_voffset_msr(CAVE_NOMINAL_VOFFSET);
