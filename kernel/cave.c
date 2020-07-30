@@ -119,7 +119,7 @@ static inline int __syscall_rate_work(struct syscall_ratelimit *p)
 		if (enabled <= 0) {
 			p->enabled = 1;
 
-			return -1;
+			return -rate;
                 }
         }
 
@@ -133,13 +133,9 @@ static enum hrtimer_restart ratelimit_work(struct hrtimer *timer)
 	for_each_online_cpu(i) {
 		struct syscall_ratelimit *p = per_cpu_ptr(&srl, i);
 		int rate = __syscall_rate_work(p);
-
-		if (rate > 0)
-			pr_warn("cave: syscall rate inc: cpu%d %u (limit=%u / sec, period=%u ms)\n",
-				i, rate, syscall_rate_limit, syscall_rate_period);
-		else if (rate < 0)
-			pr_warn("cave: syscall rate dec: cpu%d (limit=%u / sec, period=%u ms)\n",
-				i, syscall_rate_limit, syscall_rate_period);
+		pr_warn("cave: syscall rate: %s cave on cpu%d (limit=%d/%u / sec, period=%u ms)\n",
+			(rate > 0) ? "disable" : "enable",
+			i, rate, syscall_rate_limit, syscall_rate_period);
 	}
 
 	hrtimer_forward_now(&ratelimit_hrtimer, ratelimit_period_time);
