@@ -13,6 +13,8 @@
 #include <linux/vmalloc.h>
 #include <generated/asm-offsets.h>
 
+#define CAVE_CONTEXT(__v)	((struct cave_context){ .voffset = __v })
+
 static volatile int cave_enabled = 0;
 
 #ifdef CONFIG_CAVE_SYSCALL_CONTEXT
@@ -329,8 +331,6 @@ static DEFINE_SPINLOCK(cave_lock);
 #define cave_lock(...)
 #define cave_unlock(flags)	(void)(flags)
 #endif
-
-#define CAVE_CONTEXT(__v)	((struct cave_context){ .voffset = __v })
 
 static volatile struct cave_context cave_max_context __read_mostly = CAVE_CONTEXT(400);
 static volatile struct cave_context cave_kernel_context __read_mostly = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
