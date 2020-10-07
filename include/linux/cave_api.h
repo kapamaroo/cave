@@ -12,7 +12,7 @@ void cave_context_switch_voltage(struct task_struct *prev, struct task_struct *n
 void cave_fork_init(struct task_struct *p);
 
 #else
-void cave_exec_task(struct task_struct *p)
+static void cave_exec_task(struct task_struct *p)
 {
 }
 
