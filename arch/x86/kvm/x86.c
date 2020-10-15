@@ -68,6 +68,8 @@
 #include <asm/div64.h>
 #include <asm/irq_remapping.h>
 
+#include <linux/cave_api.h>
+
 #define CREATE_TRACE_POINTS
 #include "trace.h"
 
@@ -6908,6 +6910,8 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 		smp_send_reschedule(vcpu->cpu);
 	}
 
+	cave_guest_entry();
+
 	trace_kvm_entry(vcpu->vcpu_id);
 	wait_lapic_expire(vcpu);
 	guest_enter_irqoff();
@@ -6961,6 +6965,8 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 	++vcpu->stat.exits;
 
 	guest_exit_irqoff();
+
+	cave_guest_exit();
 
 	local_irq_enable();
 	preempt_enable();

@@ -882,6 +882,18 @@ __visible void cave_syscall_exit_switch(void)
 	_cave_switch(context, EXIT_SYSCALL);
 }
 
+void cave_guest_entry(void)
+{
+	_cave_switch(&current->cave_data.user_ctx, ENTRY);
+}
+EXPORT_SYMBOL_GPL(cave_guest_entry);
+
+void cave_guest_exit(void)
+{
+	_cave_switch(&cave_kernel_context, EXIT);
+}
+EXPORT_SYMBOL_GPL(cave_guest_exit);
+
 /*
  * The current task may be either a kernel or a user task.
  *
