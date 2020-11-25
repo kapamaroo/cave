@@ -1788,6 +1788,11 @@ SYSCALL_DEFINE3(cave_ctl, int, action, int, op1, int, op2)
 
 	switch (action) {
 	case CAVE_SET_TASK_VOFFSET:
+		if (op1 > 0) {
+			p = find_task_by_vpid(op1);
+			if (!p)
+				return -EINVAL;
+		}
 		voffset = op2;
 		if (voffset < 0 || voffset > cave_max_context.voffset)
 			return -EINVAL;
@@ -1796,6 +1801,9 @@ SYSCALL_DEFINE3(cave_ctl, int, action, int, op1, int, op2)
 		p->cave_data.user_ctx = CAVE_CONTEXT(voffset);
 		p->cave_data.skip_default_user_context = true;
 		spin_unlock_irqrestore(&p->cave_data.lock, flags);
+
+		pr_info("cave: %s [pid=%d] set voffset=%ld\n",
+			p->comm, task_pid_vnr(p), voffset);
 
 		return 0;
 	case CAVE_LOOP:
