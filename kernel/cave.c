@@ -1005,14 +1005,12 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, const int t_min)
 	unsigned long long time = 0;
 	unsigned long long counter = 0;
 	unsigned long long cycles = 0;
-	int cnt = 0;
 
 	for (j = 0; j < CAVE_SWITCH_CASES; j++) {
 		if (t->counter[j]) {
 			time += t->time[j];
 			counter += t->counter[j];
 			cycles += t->cycles[j];
-			cnt++;
 		}
 	}
 
