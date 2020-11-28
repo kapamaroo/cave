@@ -345,8 +345,6 @@ static volatile long curr_voffset = CAVE_NOMINAL_VOFFSET;
 
 #ifdef CONFIG_CAVE_STATS
 static DEFINE_SPINLOCK(cave_stat_avg_lock);
-static struct cave_stats cave_stat_avg[4];
-static int stat_samples[3] = { 0, 0, 0 };
 
 #ifdef CONFIG_CAVE_SKIP_MSR_RW
 static bool skip_msr __read_mostly = false;
@@ -359,6 +357,68 @@ static bool skip_msr __read_mostly = false;
 
 #define CAVE_STATS_TIMER_PERIOD	1
 #define CAVE_STATS_MINUTE	(60 / CAVE_STATS_TIMER_PERIOD)
+
+struct cave_stats_data {
+	int num;
+	struct cave_stats buffer[1 * CAVE_STATS_MINUTE];
+	struct cave_stats sum;
+	int idx;
+	int size;
+};
+
+static char *avg_names[3] = { "total", "1sec", "1min" };
+static struct cave_stats cave_stat_avg[3];
+static struct cave_stats_data avg_data[1];
+
+static inline void add_stat(struct cave_stats *result, struct cave_stats *val)
+{
+	int i;
+
+	for (i = 0; i < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; i++) {
+		result->time[i] += val->time[i];
+		result->counter[i] += val->counter[i];
+		result->cycles[i] += val->cycles[i];
+	}
+}
+
+static inline void sub_stat(struct cave_stats *result, struct cave_stats *val)
+{
+	int i;
+
+	for (i = 0; i < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; i++) {
+		result->time[i] -= val->time[i];
+		result->counter[i] -= val->counter[i];
+		result->cycles[i] -= val->cycles[i];
+	}
+}
+
+static inline void div_stat(struct cave_stats *result, struct cave_stats *val, const int div)
+{
+	int i;
+
+	for (i = 0; i < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; i++) {
+		result->time[i] = val->time[i] / div;
+		result->counter[i] = val->counter[i] / div;
+		result->cycles[i] = val->cycles[i] / div;
+	}
+}
+
+static void calc_moving_average(struct cave_stats *avg, struct cave_stats *val,
+				struct cave_stats_data *d)
+{
+	add_stat(&d->sum, val);
+	if (d->num < d->size) {
+		d->buffer[d->idx] = *val;
+		d->idx = (d->idx + 1) % d->size;
+		d->num++;
+	}
+	else {
+		sub_stat(&d->sum, &d->buffer[d->idx]);
+		d->buffer[d->idx] = *val;
+		d->idx = (d->idx + 1) % d->size;
+	}
+	div_stat(avg, &d->sum, d->num);
+}
 
 static struct hrtimer stats_hrtimer;
 static ktime_t stats_period_time;
@@ -401,54 +461,11 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 		}
 	}
 
-#define __RUNNING_AVG_STAT(d, s, n, x)					\
-	do {								\
-		d.cycles[x] = (d.cycles[x] * (n) + s.cycles[x]) / ((n) + 1); \
-		d.counter[x] = (d.counter[x] * (n) + s.counter[x]) / ((n) + 1); \
-		d.time[x] = (d.time[x] * (n) + s.time[x]) / ((n) + 1);	\
-	} while (0)
-
-#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-#define RUNNING_AVG_STAT(d, s, n, l)					\
-	do {								\
-		if (n == l)						\
-			n--;						\
-									\
-		__RUNNING_AVG_STAT(d, s, n, CAVE_INC);			\
-		__RUNNING_AVG_STAT(d, s, n, CAVE_DEC);			\
-		__RUNNING_AVG_STAT(d, s, n, SKIP_FAST);			\
-		__RUNNING_AVG_STAT(d, s, n, SKIP_SLOW);			\
-		__RUNNING_AVG_STAT(d, s, n, SKIP_REPLAY);		\
-		__RUNNING_AVG_STAT(d, s, n, SKIP_RACE);			\
-		__RUNNING_AVG_STAT(d, s, n, CAVE_SWITCH_CASES + LOCK_INC); \
-		__RUNNING_AVG_STAT(d, s, n, CAVE_SWITCH_CASES + LOCK_DEC); \
-		__RUNNING_AVG_STAT(d, s, n, CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET); \
-		__RUNNING_AVG_STAT(d, s, n, CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR); \
-		n++;							\
-	} while (0)
-#else
-#define RUNNING_AVG_STAT(d, s, n, l)					\
-	do {								\
-		if (n == l)						\
-			n--;						\
-									\
-		__RUNNING_AVG_STAT(d, s, n, CAVE_INC);			\
-		__RUNNING_AVG_STAT(d, s, n, CAVE_DEC);			\
-		__RUNNING_AVG_STAT(d, s, n, SKIP_FAST);			\
-		__RUNNING_AVG_STAT(d, s, n, CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET); \
-		n++;							\
-	} while (0)
-#endif
-
 	spin_lock_irqsave(&cave_stat_avg_lock, flags);
-	cave_stat_avg[0] = t;
-	RUNNING_AVG_STAT(cave_stat_avg[1], t, stat_samples[0], 1 * CAVE_STATS_MINUTE);
-	/* RUNNING_AVG_STAT(cave_stat_avg[2], t, stat_samples[1], 5 * CAVE_STATS_MINUTE); */
-	/* RUNNING_AVG_STAT(cave_stat_avg[3], t, stat_samples[2], 10 * CAVE_STATS_MINUTE); */
+	add_stat(&cave_stat_avg[0], &t);
+	cave_stat_avg[1] = t;
+	calc_moving_average(&cave_stat_avg[2], &t, &avg_data[0]);
 	spin_unlock_irqrestore(&cave_stat_avg_lock, flags);
-
-#undef __RUNNING_AVG_STAT
-#undef RUNNING_AVG_STAT
 
 	hrtimer_forward_now(&stats_hrtimer, stats_period_time);
 
@@ -464,10 +481,10 @@ static void stats_init(void)
 		memset(t, 0, sizeof(struct cave_stats));
 	}
 
+	memset(avg_data, 0, sizeof(avg_data));
+	avg_data[0].size = 1 * CAVE_STATS_MINUTE;
+
 	memset(cave_stat_avg, 0, sizeof(cave_stat_avg));
-	stat_samples[0] = 0;
-	stat_samples[1] = 0;
-	stat_samples[2] = 0;
 
 	stats_period_time = ktime_set(CAVE_STATS_TIMER_PERIOD, 0);
 	hrtimer_init(&stats_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
@@ -992,7 +1009,7 @@ static void cave_apply_tasks(void)
 }
 
 #ifdef CONFIG_CAVE_STATS
-static int _print_cave_stats(char *buf, struct cave_stats *t, const int t_min)
+static int _print_cave_stats(char *buf, struct cave_stats *t, char *name)
 {
 	int ret = 0;
 
@@ -1017,9 +1034,8 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, const int t_min)
 	if (time == 0 || counter == 0)
 	        return ret;
 
-	ret += sprintf(buf + ret, "%dmin_stats\n", t_min);
-	ret += sprintf(buf + ret, "\nOverhead_delay cycles_avg  time_avg%% counter_avg%%\n");
-	ret += sprintf(buf + ret, "total_avg %llu 100.00 100.00\n", time / counter);
+	ret += sprintf(buf + ret, "\n%s_stats cycles_avg  time_avg%% counter_avg%%\n", name);
+	ret += sprintf(buf + ret, "total_avg %llu 100.00 100.00\n", cycles);
 
 	for (j = 0; j < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; j++) {
 		if (j == SKIP_FAST)
@@ -1030,16 +1046,15 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, const int t_min)
 			SEPARATOR();
 			continue;
 		}
-		ret += sprintf(buf + ret, "%s %llu " FMT " " FMT
-			       "\n", cave_stat_name[j],
+		ret += sprintf(buf + ret, "%s %llu " FMT " " FMT "\n",
+			       cave_stat_name[j],
 			       t->cycles[j],
 			       S(t->time[j], time),
 			       S(t->counter[j], counter)
 			       );
 	}
 
-	if (t->time[CAVE_INC] != 0 || time != t->time[CAVE_INC])
-		ret += sprintf(buf + ret, "\nVoltage_delay time_avg%%\n");
+	ret += sprintf(buf + ret, "\nVoltage_delay time_avg%%\n");
 
 	if (t->time[CAVE_INC] != 0) {
 		ret += sprintf(buf + ret, "wait_target/inc " FMT "\n",
@@ -1047,7 +1062,7 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, const int t_min)
 	}
 
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	if (time && time != t->time[CAVE_INC]) {
+	if (time != t->time[CAVE_INC]) {
 		ret += sprintf(buf + ret, "wait_curr/eq_dec " FMT "\n",
 			       S(t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR], time - t->time[CAVE_INC]));
 	}
@@ -1068,19 +1083,17 @@ static int print_cave_stats(char *buf)
 	unsigned long flags;
 	int ret = 0;
 	int i;
-	static struct cave_stats tmp_stat[4];
-	const int w[4] = { 0, 1, 5, 10 };
+	static struct cave_stats tmp_stat[3];
 
 	spin_lock_irqsave(&cave_stat_avg_lock, flags);
-	tmp_stat[0] = cave_stat_avg[0];
-	tmp_stat[1] = cave_stat_avg[1];
-	/* tmp_stat[2] = cave_stat_avg[2]; */
-	/* tmp_stat[3] = cave_stat_avg[3]; */
+	memcpy(tmp_stat, cave_stat_avg, sizeof(tmp_stat));
 	spin_unlock_irqrestore(&cave_stat_avg_lock, flags);
 
-	if (cave_enabled)
-		for (i = 0; i < 2; i++)
-			ret += _print_cave_stats(buf + ret, &tmp_stat[i], w[i]);
+	if (cave_enabled) {
+		ret += sprintf(buf + ret, "Performance overhead\n");
+		for (i = 0; i < 3; i++)
+			ret += _print_cave_stats(buf + ret, &tmp_stat[i], avg_names[i]);
+	}
 
 	return ret;
 }
