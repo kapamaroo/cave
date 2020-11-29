@@ -509,6 +509,12 @@ static void stats_clear(void)
 
 /* Arch specific */
 
+/*
+mask instead of compare
+#define _TO_VOFFSET_DATA(__val)         (((0x800ULL - (((u64)__val))) & 0x7FF) << 21)
+#define _TO_VOFFSET_VAL(__data)         ((0x800ULL - ((u64)__data >> 21)) & 0x7FF)
+*/
+
 #define TO_VOFFSET_DATA(__val)	(__val ? (0x800ULL - (u64)__val) << 21 : 0ULL)
 #define TO_VOFFSET_VAL(__data)    (__data ? (0x800ULL - ((u64)__data >> 21)) : 0ULL)
 
