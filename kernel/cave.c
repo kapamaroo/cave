@@ -1034,41 +1034,71 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, char *name)
 	if (time == 0 || counter == 0)
 	        return ret;
 
-	ret += sprintf(buf + ret, "\n%s_stats cycles_avg  time_avg%% counter_avg%%\n", name);
-	ret += sprintf(buf + ret, "total_avg %llu 100.00 100.00\n", cycles);
+	ret += sprintf(buf + ret, "\naverage cycles%% time%% counter%%\n");
+	ret += sprintf(buf + ret, "%s_stats %llu %llu %llu\n", name, cycles, time, counter);
 
-	for (j = 0; j < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; j++) {
-		if (j == SKIP_FAST)
-			SEPARATOR();
-		if (j == CAVE_SWITCH_CASES || j == CAVE_SWITCH_CASES + CAVE_LOCK_CASES)
-			SEPARATOR();
+	for (j = 0; j < CAVE_SWITCH_CASES; j++) {
 		if (t->counter[j] == 0) {
 			SEPARATOR();
 			continue;
 		}
-		ret += sprintf(buf + ret, "%s %llu " FMT " " FMT "\n",
+		ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
 			       cave_stat_name[j],
-			       t->cycles[j],
+			       S(t->cycles[j], cycles),
 			       S(t->time[j], time),
 			       S(t->counter[j], counter)
 			       );
 	}
 
-	ret += sprintf(buf + ret, "\nVoltage_delay time_avg%%\n");
-
 	if (t->time[CAVE_INC] != 0) {
-		ret += sprintf(buf + ret, "wait_target/inc " FMT "\n",
-			       S(t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET], t->time[CAVE_INC]));
+		j = CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET;
+		ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
+			       cave_stat_name[j],
+			       S(t->cycles[j], t->cycles[CAVE_INC]),
+			       S(t->time[j], t->time[CAVE_INC]),
+			       S(t->counter[j], t->counter[CAVE_INC])
+			       );
+	}
+	else {
+		SEPARATOR();
 	}
 
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 	if (time != t->time[CAVE_INC]) {
-		ret += sprintf(buf + ret, "wait_curr/eq_dec " FMT "\n",
-			       S(t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR], time - t->time[CAVE_INC]));
+		j = CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR;
+		ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
+			       cave_stat_name[j],
+			       S(t->cycles[j], cycles - t->cycles[CAVE_INC]),
+			       S(t->time[j], time - t->time[CAVE_INC]),
+			       S(t->counter[j], counter - t->counter[CAVE_INC])
+			       );
 	}
-#endif
+	else {
+		SEPARATOR();
+	}
 
-	SEPARATOR();
+	j = CAVE_SWITCH_CASES + LOCK_INC;
+	ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
+		       cave_stat_name[j],
+		       S(t->cycles[j], cycles),
+		       S(t->time[j], time),
+		       S(t->counter[j], counter)
+		       );
+
+	if (time != t->time[CAVE_INC] + t->time[SKIP_FAST]) {
+		j = CAVE_SWITCH_CASES + LOCK_DEC;
+		ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
+		               cave_stat_name[j],
+			       S(t->cycles[j], (cycles - t->cycles[CAVE_INC] - t->cycles[SKIP_FAST])),
+			       S(t->time[j], (time - t->time[CAVE_INC] - t->time[SKIP_FAST])),
+			       S(t->counter[j], (counter - t->counter[CAVE_INC] - t->counter[SKIP_FAST]))
+			       );
+	}
+	else {
+		SEPARATOR();
+	}
+
+#endif
 
 #undef FMT
 #undef S
@@ -1089,11 +1119,9 @@ static int print_cave_stats(char *buf)
 	memcpy(tmp_stat, cave_stat_avg, sizeof(tmp_stat));
 	spin_unlock_irqrestore(&cave_stat_avg_lock, flags);
 
-	if (cave_enabled) {
-		ret += sprintf(buf + ret, "Performance overhead\n");
+	if (cave_enabled)
 		for (i = 0; i < 3; i++)
 			ret += _print_cave_stats(buf + ret, &tmp_stat[i], avg_names[i]);
-	}
 
 	return ret;
 }
