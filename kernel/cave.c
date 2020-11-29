@@ -198,8 +198,8 @@ static void syscall_ratelimit_clear(void)
 
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 enum cave_lock_case {
-	LOCK_INC = 0,
-	LOCK_DEC,
+	TRYLOCK_INC = 0,
+	TRYLOCK_DEC,
 	CAVE_LOCK_CASES
 };
 #else
@@ -229,8 +229,8 @@ static char *cave_stat_name[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASE
 	__stringify(SKIP_REPLAY),
 	__stringify(SKIP_RACE),
 
-	__stringify(LOCK_INC),
-	__stringify(LOCK_DEC),
+	__stringify(TRYLOCK_INC),
+	__stringify(TRYLOCK_DEC),
 
 #endif
 	__stringify(WAIT_TARGET),
@@ -657,7 +657,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	start = start_measure(reason);
 #endif
 
-	cave_lock(flags, LOCK_INC, start);
+	cave_lock(flags, TRYLOCK_INC, start);
 
 	this_cpu_write(context, *next_ctx);
 	target_voffset = read_target_voffset();
@@ -700,7 +700,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 
 	/* new_voffset > target_voffset */
 
-	cave_lock(flags, LOCK_DEC);
+	cave_lock(flags, TRYLOCK_DEC);
 
 	switch_path_contention--;
 
@@ -1077,7 +1077,7 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, char *name)
 		SEPARATOR();
 	}
 
-	j = CAVE_SWITCH_CASES + LOCK_INC;
+	j = CAVE_SWITCH_CASES + TRYLOCK_INC;
 	ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
 		       cave_stat_name[j],
 		       S(t->cycles[j], cycles),
@@ -1086,7 +1086,7 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, char *name)
 		       );
 
 	if (time != t->time[CAVE_INC] + t->time[SKIP_FAST]) {
-		j = CAVE_SWITCH_CASES + LOCK_DEC;
+		j = CAVE_SWITCH_CASES + TRYLOCK_DEC;
 		ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
 		               cave_stat_name[j],
 			       S(t->cycles[j], (cycles - t->cycles[CAVE_INC] - t->cycles[SKIP_FAST])),
