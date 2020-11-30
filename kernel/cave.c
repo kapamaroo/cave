@@ -215,9 +215,9 @@ enum cave_wait_cases {
 };
 
 struct cave_stats {
-	unsigned long long time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES];
-	unsigned long long counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES];
 	unsigned long long cycles[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES];
+	unsigned long long counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES];
+	unsigned long long duration[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES];
 };
 
 static char *cave_stat_name[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES] = {
@@ -264,11 +264,11 @@ static inline void _end_measure(unsigned long long start, enum cave_switch_case 
 {
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
 
-	unsigned long long time = rdtsc() - start;
+	unsigned long long cycles = rdtsc() - start;
 
-	/* WARN_ON_ONCE(t->time[c] >= ULLONG_MAX - time); */
+	/* WARN_ON_ONCE(t->cycles[c] >= ULLONG_MAX - cycles); */
 
-	t->time[c] += time;
+	t->cycles[c] += cycles;
 	t->counter[c]++;
 }
 
@@ -277,11 +277,11 @@ static inline void _end_lock_measure(unsigned long long start, enum cave_lock_ca
 {
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
 
-	unsigned long long time = rdtsc() - start;
+	unsigned long long cycles = rdtsc() - start;
 
-	/* WARN_ON_ONCE(t->time[CAVE_SWITCH_CASES + c] > ULLONG_MAX - time); */
+	/* WARN_ON_ONCE(t->cycles[CAVE_SWITCH_CASES + c] > ULLONG_MAX - cycles); */
 
-	t->time[CAVE_SWITCH_CASES + c] += time;
+	t->cycles[CAVE_SWITCH_CASES + c] += cycles;
 	t->counter[CAVE_SWITCH_CASES + c]++;
 }
 #endif
@@ -375,9 +375,9 @@ static inline void add_stat(struct cave_stats *result, struct cave_stats *val)
 	int i;
 
 	for (i = 0; i < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; i++) {
-		result->time[i] += val->time[i];
-		result->counter[i] += val->counter[i];
 		result->cycles[i] += val->cycles[i];
+		result->counter[i] += val->counter[i];
+		result->duration[i] += val->duration[i];
 	}
 }
 
@@ -386,9 +386,9 @@ static inline void sub_stat(struct cave_stats *result, struct cave_stats *val)
 	int i;
 
 	for (i = 0; i < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; i++) {
-		result->time[i] -= val->time[i];
-		result->counter[i] -= val->counter[i];
 		result->cycles[i] -= val->cycles[i];
+		result->counter[i] -= val->counter[i];
+		result->duration[i] -= val->duration[i];
 	}
 }
 
@@ -397,9 +397,9 @@ static inline void div_stat(struct cave_stats *result, struct cave_stats *val, c
 	int i;
 
 	for (i = 0; i < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; i++) {
-		result->time[i] = val->time[i] / div;
-		result->counter[i] = val->counter[i] / div;
 		result->cycles[i] = val->cycles[i] / div;
+		result->counter[i] = val->counter[i] / div;
+		result->duration[i] = val->duration[i] / div;
 	}
 }
 
@@ -429,7 +429,7 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 	struct cave_stats t;
 	int i;
 	int j;
-	int cnt[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES] = { 0 };
+	int cpu_cnt[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES] = { 0 };
 
 	memset(&t, 0, sizeof(t));
 
@@ -443,21 +443,21 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 		cave_unlock(flags);
 
 		for (j = 0; j < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; j++) {
-			/* WARN_ON_ONCE((c.time[j] == 0) ^ (c.counter[j] == 0)); */
+			/* WARN_ON_ONCE((c.cycles[j] == 0) ^ (c.counter[j] == 0)); */
 			if (c.counter[j]) {
-				t.time[j] += c.time[j];
+				t.cycles[j] += c.cycles[j];
 				t.counter[j] += c.counter[j];
-				t.cycles[j] += c.time[j] / c.counter[j];
-				cnt[j]++;
+				t.duration[j] += c.cycles[j] / c.counter[j];
+				cpu_cnt[j]++;
 			}
 		}
 	}
 
 	for (j = 0; j < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; j++) {
-		if (cnt[j]) {
-			t.time[j] /= cnt[j];
-			t.counter[j] /= cnt[j];
-			t.cycles[j] /= cnt[j];
+		if (cpu_cnt[j]) {
+			t.cycles[j] /= cpu_cnt[j];
+			t.counter[j] /= cpu_cnt[j];
+			t.duration[j] /= cpu_cnt[j];
 		}
 	}
 
@@ -597,7 +597,7 @@ static inline void wait_curr_voffset(long new_voffset)
 		cpu_relax();
 
 #ifdef CONFIG_CAVE_STATS
-	t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR] += rdtsc() - start;
+	t->cycles[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR] += rdtsc() - start;
 	t->counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR]++;
 #endif
 }
@@ -620,7 +620,7 @@ static inline void wait_target_voffset(long new_voffset)
 		cpu_relax();
 
 #ifdef CONFIG_CAVE_STATS
-	t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET] += rdtsc() - start;
+	t->cycles[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET] += rdtsc() - start;
 	t->counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET]++;
 #endif
 }
@@ -765,7 +765,7 @@ static inline void wait_target_voffset(long new_voffset)
 		cpu_relax();
 
 #ifdef CONFIG_CAVE_STATS
-	t->time[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET] += rdtsc() - start;
+	t->cycles[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET] += rdtsc() - start;
 	t->counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET]++;
 #endif
 }
@@ -1025,23 +1025,23 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, char *name)
 #define FMT	"%llu.%02llu"
 
 	int j;
-	unsigned long long time = 0;
-	unsigned long long counter = 0;
 	unsigned long long cycles = 0;
+	unsigned long long counter = 0;
+	unsigned long long duration = 0;
 
 	for (j = 0; j < CAVE_SWITCH_CASES; j++) {
 		if (t->counter[j]) {
-			time += t->time[j];
-			counter += t->counter[j];
 			cycles += t->cycles[j];
+			counter += t->counter[j];
+			duration += t->duration[j];
 		}
 	}
 
-	if (time == 0 || counter == 0)
+	if (cycles == 0 || counter == 0)
 	        return ret;
 
-	ret += sprintf(buf + ret, "\naverage cycles%% time%% counter%%\n");
-	ret += sprintf(buf + ret, "%s_stats %llu %llu %llu\n", name, cycles, time, counter);
+	ret += sprintf(buf + ret, "\naverage duration%% cycles%% counter%%\n");
+	ret += sprintf(buf + ret, "%s_stats %llu %llu %llu\n", name, duration, cycles, counter);
 
 	for (j = 0; j < CAVE_SWITCH_CASES; j++) {
 		if (t->counter[j] == 0) {
@@ -1050,18 +1050,18 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, char *name)
 		}
 		ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
 			       cave_stat_name[j],
+			       S(t->duration[j], duration),
 			       S(t->cycles[j], cycles),
-			       S(t->time[j], time),
 			       S(t->counter[j], counter)
 			       );
 	}
 
-	if (t->time[CAVE_INC] != 0) {
+	if (t->cycles[CAVE_INC] != 0) {
 		j = CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET;
 		ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
 			       cave_stat_name[j],
+			       S(t->duration[j], t->duration[CAVE_INC]),
 			       S(t->cycles[j], t->cycles[CAVE_INC]),
-			       S(t->time[j], t->time[CAVE_INC]),
 			       S(t->counter[j], t->counter[CAVE_INC])
 			       );
 	}
@@ -1070,12 +1070,12 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, char *name)
 	}
 
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	if (time != t->time[CAVE_INC]) {
+	if (cycles != t->cycles[CAVE_INC]) {
 		j = CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR;
 		ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
 			       cave_stat_name[j],
+			       S(t->duration[j], duration - t->duration[CAVE_INC]),
 			       S(t->cycles[j], cycles - t->cycles[CAVE_INC]),
-			       S(t->time[j], time - t->time[CAVE_INC]),
 			       S(t->counter[j], counter - t->counter[CAVE_INC])
 			       );
 	}
@@ -1086,17 +1086,17 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, char *name)
 	j = CAVE_SWITCH_CASES + TRYLOCK_INC;
 	ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
 		       cave_stat_name[j],
+		       S(t->duration[j], duration),
 		       S(t->cycles[j], cycles),
-		       S(t->time[j], time),
 		       S(t->counter[j], counter)
 		       );
 
-	if (time != t->time[CAVE_INC] + t->time[SKIP_FAST]) {
+	if (cycles != t->cycles[CAVE_INC] + t->cycles[SKIP_FAST]) {
 		j = CAVE_SWITCH_CASES + TRYLOCK_DEC;
 		ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
 		               cave_stat_name[j],
+			       S(t->duration[j], (duration - t->duration[CAVE_INC] - t->duration[SKIP_FAST])),
 			       S(t->cycles[j], (cycles - t->cycles[CAVE_INC] - t->cycles[SKIP_FAST])),
-			       S(t->time[j], (time - t->time[CAVE_INC] - t->time[SKIP_FAST])),
 			       S(t->counter[j], (counter - t->counter[CAVE_INC] - t->counter[SKIP_FAST]))
 			       );
 	}
