@@ -423,7 +423,7 @@ static void calc_moving_average(struct cave_stats *avg, struct cave_stats *val,
 static struct hrtimer stats_hrtimer;
 static ktime_t stats_period_time;
 
-static enum hrtimer_restart stats_gather(struct hrtimer *timer)
+static struct cave_stats __stats_gather(void)
 {
 	unsigned long flags;
 	struct cave_stats t;
@@ -461,14 +461,27 @@ static enum hrtimer_restart stats_gather(struct hrtimer *timer)
 		}
 	}
 
+	return t;
+}
+
+static void _stats_gather(void)
+{
+	unsigned long flags;
+	struct cave_stats t;
+
+	t = __stats_gather();
+
 	spin_lock_irqsave(&cave_stat_avg_lock, flags);
 	add_stat(&cave_stat_avg[0], &t);
 	cave_stat_avg[1] = t;
 	calc_moving_average(&cave_stat_avg[2], &t, &avg_data[0]);
 	spin_unlock_irqrestore(&cave_stat_avg_lock, flags);
+}
 
+static enum hrtimer_restart stats_gather(struct hrtimer *timer)
+{
+	_stats_gather();
 	hrtimer_forward_now(&stats_hrtimer, stats_period_time);
-
 	return HRTIMER_RESTART;
 }
 
