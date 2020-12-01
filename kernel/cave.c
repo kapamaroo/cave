@@ -214,6 +214,24 @@ enum cave_wait_cases {
 	CAVE_WAIT_CASES
 };
 
+enum cave_stat_idx {
+	C_CAVE_INC = CAVE_INC,
+	C_CAVE_DEC = CAVE_DEC,
+	C_SKIP_FAST = SKIP_FAST,
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
+	C_SKIP_SLOW = SKIP_SLOW,
+	C_SKIP_REPLAY = SKIP_REPLAY,
+	C_SKIP_RACE = SKIP_RACE,
+#endif
+	C_TRYLOCK_INC = CAVE_SWITCH_CASES + TRYLOCK_INC,
+	C_TRYLOCK_DEC = CAVE_SWITCH_CASES + TRYLOCK_DEC,
+
+	C_WAIT_TARGET = CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET,
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
+	C_WAIT_CURR = CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR
+#endif
+};
+
 struct cave_stats {
 	unsigned long long cycles[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES];
 	unsigned long long counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES];
@@ -354,6 +372,9 @@ static bool skip_msr __read_mostly = false;
 #define FIXED_1	(1 << FSHIFT)
 #define STAT_INT(x)	((x) >> FSHIFT)
 #define STAT_FRAC(x)	STAT_INT(((x) & (FIXED_1 - 1)) * 100)
+#define _STAT_DIV(x, t) 100 * ((x) << FSHIFT) / (t)
+#define STAT_DIV(x, t)	STAT_INT(_STAT_DIV(x, t)), STAT_FRAC(_STAT_DIV(x, t))
+#define STAT_FMT	"%llu.%02llu"
 
 #define CAVE_STATS_TIMER_PERIOD	1
 #define CAVE_STATS_MINUTE	(60 / CAVE_STATS_TIMER_PERIOD)
@@ -1032,97 +1053,60 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, char *name)
 {
 	int ret = 0;
 
-#define SEPARATOR()	ret += sprintf(buf + ret, "\n")
-#define F(x, t) 100 * ((x) << FSHIFT) / (t)
-#define S(x, t)	STAT_INT(F(x, t)), STAT_FRAC(F(x, t))
-#define FMT	"%llu.%02llu"
-
 	int j;
 	unsigned long long cycles = 0;
 	unsigned long long counter = 0;
-	unsigned long long duration = 0;
 
 	for (j = 0; j < CAVE_SWITCH_CASES; j++) {
 		if (t->counter[j]) {
 			cycles += t->cycles[j];
 			counter += t->counter[j];
-			duration += t->duration[j];
 		}
 	}
 
 	if (cycles == 0 || counter == 0)
 	        return ret;
 
-	ret += sprintf(buf + ret, "\naverage duration%% cycles%% counter%%\n");
-	ret += sprintf(buf + ret, "%s_stats %llu %llu %llu\n", name, duration, cycles, counter);
+	ret += sprintf(buf + ret, "%s_stats %llu %llu\n", name, cycles, counter);
 
-	for (j = 0; j < CAVE_SWITCH_CASES; j++) {
-		if (t->counter[j] == 0) {
-			SEPARATOR();
-			continue;
-		}
-		ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
+	for (j = 0; j < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; j++) {
+		ret += sprintf(buf + ret, "%s %llu %llu %llu\n",
 			       cave_stat_name[j],
-			       S(t->duration[j], duration),
-			       S(t->cycles[j], cycles),
-			       S(t->counter[j], counter)
+			       t->cycles[j],
+			       t->counter[j],
+			       t->duration[j]
 			       );
 	}
 
-	if (t->cycles[CAVE_INC] != 0) {
-		j = CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET;
-		ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
-			       cave_stat_name[j],
-			       S(t->duration[j], t->duration[CAVE_INC]),
-			       S(t->cycles[j], t->cycles[CAVE_INC]),
-			       S(t->counter[j], t->counter[CAVE_INC])
-			       );
-	}
-	else {
-		SEPARATOR();
-	}
+#define T_WAIT_TARGET(__m)	(t->__m[C_WAIT_TARGET])
 
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	if (cycles != t->cycles[CAVE_INC]) {
-		j = CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR;
-		ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
-			       cave_stat_name[j],
-			       S(t->duration[j], duration - t->duration[CAVE_INC]),
-			       S(t->cycles[j], cycles - t->cycles[CAVE_INC]),
-			       S(t->counter[j], counter - t->counter[CAVE_INC])
-			       );
-	}
-	else {
-		SEPARATOR();
-	}
-
-	j = CAVE_SWITCH_CASES + TRYLOCK_INC;
-	ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
-		       cave_stat_name[j],
-		       S(t->duration[j], duration),
-		       S(t->cycles[j], cycles),
-		       S(t->counter[j], counter)
-		       );
-
-	if (cycles != t->cycles[CAVE_INC] + t->cycles[SKIP_FAST]) {
-		j = CAVE_SWITCH_CASES + TRYLOCK_DEC;
-		ret += sprintf(buf + ret, "%s " FMT " " FMT " " FMT "\n",
-		               cave_stat_name[j],
-			       S(t->duration[j], (duration - t->duration[CAVE_INC] - t->duration[SKIP_FAST])),
-			       S(t->cycles[j], (cycles - t->cycles[CAVE_INC] - t->cycles[SKIP_FAST])),
-			       S(t->counter[j], (counter - t->counter[CAVE_INC] - t->counter[SKIP_FAST]))
-			       );
-	}
-	else {
-		SEPARATOR();
-	}
-
+#define T_WAIT_CURR(__m)	(t->__m[C_WAIT_CURR])
+#define T_TRYLOCK(__m)		(t->__m[C_TRYLOCK_INC] + t->__m[C_TRYLOCK_DEC])
+#else
+#define T_WAIT_CURR(__m)	(0)
+#define T_TRYLOCK(__m)		(0)
 #endif
 
-#undef FMT
-#undef S
-#undef F
-#undef SEPARATOR
+#define T_WAIT(__m)	(T_WAIT_TARGET(__m) + T_WAIT_CURR(__m))
+
+	ret += sprintf(buf + ret, "%s " STAT_FMT "\n",
+		       "wait",
+		       STAT_DIV(T_WAIT(cycles), cycles)
+		       );
+
+	ret += sprintf(buf + ret, "%s " STAT_FMT "\n",
+		       "trylock",
+		       STAT_DIV(T_TRYLOCK(cycles), cycles)
+		       );
+
+	ret += sprintf(buf + ret, "%s " STAT_FMT "\n",
+		       "decide",
+		       STAT_DIV(cycles - T_WAIT(cycles) + T_TRYLOCK(cycles), cycles)
+		       );
+
+#undef T_WAIT
+#undef T_TRYLOCK
 
 	return ret;
 }
@@ -1138,9 +1122,14 @@ static int print_cave_stats(char *buf)
 	memcpy(tmp_stat, cave_stat_avg, sizeof(tmp_stat));
 	spin_unlock_irqrestore(&cave_stat_avg_lock, flags);
 
-	if (cave_enabled)
-		for (i = 0; i < 3; i++)
+	if (cave_enabled) {
+		ret += sprintf(buf + ret, "average cycles counter duration\n");
+		for (i = 0; i < 3; i++) {
 			ret += _print_cave_stats(buf + ret, &tmp_stat[i], avg_names[i]);
+			ret += sprintf(buf + ret, "\n");
+		}
+
+	}
 
 	return ret;
 }
