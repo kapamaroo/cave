@@ -1207,6 +1207,7 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 	}
 	else if (!enable && cave_enabled) {
 		struct cave_context nominal = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
+		on_each_cpu(cave_cpu_disable, &nominal, 1);
 		cave_lock(flags);
 		cave_enabled = 0;
 #ifdef CONFIG_CAVE_SYSCALL_CONTEXT
@@ -1215,7 +1216,6 @@ ssize_t enable_store(struct kobject *kobj, struct kobj_attribute *attr,
 		syscall_ratelimit_clear();
 		stats_clear();
 		cave_unlock(flags);
-		on_each_cpu(cave_cpu_disable, &nominal, 1);
 		pr_info("cave: disabled\n");
 	}
 
