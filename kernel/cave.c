@@ -42,7 +42,11 @@ static u64 read_voltage(void)
 	u64 value;
 
 	rdmsrl(0x198, value);
-	value = ((value * 100) >> 45) * 10;
+	/* Core Voltage (R/O)
+	 * P-state core voltage can be computed by
+	 * MSR_PERF_STATUS[47:32] * (float) 1/(2^13).
+	 */
+	value = (((value >> 32) & 0xFFFF) * 1000) >> 13;
 
 	return value;
 }
