@@ -1169,12 +1169,18 @@ static void cave_cpu_enable(void *data)
 {
 	struct cave_context *context = (struct cave_context *)data;
 
+	if (!cave_enabled)
+		return;
+
 	_cave_switch(context, CONTEXT_SWITCH);
 }
 
 static void cave_cpu_disable(void *data)
 {
 	struct cave_context *context = (struct cave_context *)data;
+
+	if (!cave_enabled)
+		return;
 
 	_cave_switch(context, CONTEXT_SWITCH);
 }
