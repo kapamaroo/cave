@@ -122,19 +122,8 @@ enum reason {
 	EXIT,
 	ENTRY_SYSCALL,
 	EXIT_SYSCALL,
-	CONTEXT_SWITCH
-};
-
-enum cave_switch_case {
-	CAVE_INC = 0,
-	CAVE_DEC,
-	SKIP_FAST,
-#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	SKIP_SLOW,
-	SKIP_REPLAY,
-	SKIP_RACE,
-#endif
-	CAVE_SWITCH_CASES
+	CONTEXT_SWITCH,
+	TRYLOCK
 };
 
 #ifdef CONFIG_CAVE_SYSCALL_RATELIMIT
@@ -249,65 +238,61 @@ static void syscall_ratelimit_clear(void)
 
 #ifdef CONFIG_CAVE_STATS
 
-#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-enum cave_lock_case {
-	TRYLOCK_INC = 0,
-	TRYLOCK_DEC,
-	CAVE_LOCK_CASES
-};
-#else
-#define CAVE_LOCK_CASES	0
-#endif
-
-enum cave_wait_cases {
-	WAIT_TARGET = 0,
-#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	WAIT_CURR,
-#endif
-	CAVE_WAIT_CASES
-};
-
 enum cave_stat_idx {
-	C_CAVE_INC = CAVE_INC,
-	C_CAVE_DEC = CAVE_DEC,
-	C_SKIP_FAST = SKIP_FAST,
-#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	C_SKIP_SLOW = SKIP_SLOW,
-	C_SKIP_REPLAY = SKIP_REPLAY,
-	C_SKIP_RACE = SKIP_RACE,
-#endif
-	C_TRYLOCK_INC = CAVE_SWITCH_CASES + TRYLOCK_INC,
-	C_TRYLOCK_DEC = CAVE_SWITCH_CASES + TRYLOCK_DEC,
+	C_STATS_START = 0,
 
-	C_WAIT_TARGET = CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET,
+	C_SWITCH_CASES_START = C_STATS_START,
+	C_CAVE_INC = C_SWITCH_CASES_START,
+	C_CAVE_DEC,
+	C_SKIP_FAST,
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	C_WAIT_CURR = CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR,
+	C_SKIP_SLOW,
+	C_SKIP_REPLAY,
+	C_SKIP_RACE,
 #endif
-	C_STATS
+	C_SWITCH_CASES_END,
+
+	C_TRYLOCK_CASES_START = C_SWITCH_CASES_END,
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
+	C_TRYLOCK_INC = C_TRYLOCK_CASES_START,
+	C_TRYLOCK_DEC,
+	C_TRYLOCK_CASES_END,
+#else
+	C_TRYLOCK_CASES_END = C_TRYLOCK_CASES_START,
+#endif
+
+	C_WAIT_CASES_START = C_TRYLOCK_CASES_END,
+	C_WAIT_TARGET = C_WAIT_CASES_START,
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
+	C_WAIT_CURR,
+#endif
+	C_WAIT_CASES_END,
+
+	C_STATS_END = C_WAIT_CASES_END
 };
 
 struct cave_stats {
-	unsigned long long cycles[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES];
-	unsigned long long counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES];
-	unsigned long long duration[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES];
+	unsigned long long cycles[C_STATS_END];
+	unsigned long long counter[C_STATS_END];
+	unsigned long long duration[C_STATS_END];
 };
 
-static char *cave_stat_name[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES] = {
-	__stringify(CAVE_INC),
-	__stringify(CAVE_DEC),
-	__stringify(SKIP_FAST),
+static char *cave_stat_name[C_STATS_END] = {
+	__stringify(C_CAVE_INC),
+	__stringify(C_CAVE_DEC),
+	__stringify(C_SKIP_FAST),
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	__stringify(SKIP_SLOW),
-	__stringify(SKIP_REPLAY),
-	__stringify(SKIP_RACE),
+	__stringify(C_SKIP_SLOW),
+	__stringify(C_SKIP_REPLAY),
+	__stringify(C_SKIP_RACE),
 
-	__stringify(TRYLOCK_INC),
-	__stringify(TRYLOCK_DEC),
+	__stringify(C_TRYLOCK_INC),
+	__stringify(C_TRYLOCK_DEC),
 
 #endif
-	__stringify(WAIT_TARGET),
+	__stringify(C_WAIT_TARGET),
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	__stringify(WAIT_CURR)
+	__stringify(C_WAIT_CURR)
 #endif
 };
 
@@ -328,7 +313,7 @@ static inline unsigned long long start_measure(const enum reason reason)
 	return ret;
 }
 
-static inline void _end_measure(unsigned long long start, enum cave_switch_case c,
+static inline void _end_measure(unsigned long long start, enum cave_stat_idx c,
 				const enum reason reason)
 {
 	struct cave_stats *t = this_cpu_ptr(&time_stats);
@@ -340,20 +325,6 @@ static inline void _end_measure(unsigned long long start, enum cave_switch_case 
 	t->cycles[c] += cycles;
 	t->counter[c]++;
 }
-
-#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-static inline void _end_lock_measure(unsigned long long start, enum cave_lock_case c)
-{
-	struct cave_stats *t = this_cpu_ptr(&time_stats);
-
-	unsigned long long cycles = rdtsc() - start;
-
-	/* WARN_ON_ONCE(t->cycles[CAVE_SWITCH_CASES + c] > ULLONG_MAX - cycles); */
-
-	t->cycles[CAVE_SWITCH_CASES + c] += cycles;
-	t->counter[CAVE_SWITCH_CASES + c]++;
-}
-#endif
 
 #define end_measure(start, c, r)	_end_measure(start, c, r)
 #else
@@ -378,7 +349,7 @@ static DEFINE_SPINLOCK(cave_lock);
 			if (!done) 					\
 				done = true;				\
 		if (done)						\
-			_end_lock_measure(__start, lock_case);		\
+			_end_measure(__start, lock_case, TRYLOCK);	\
 	} while (0)
 
 #define _cave_lock_3(flags, lock_case, __start)				\
@@ -388,7 +359,7 @@ static DEFINE_SPINLOCK(cave_lock);
 			if (!done) 					\
 				done = true;				\
 		if (done)						\
-			_end_lock_measure(__start, lock_case);		\
+			_end_measure(__start, lock_case, TRYLOCK);	\
 	} while (0)
 #endif
 
@@ -437,7 +408,7 @@ static inline void add_stat(struct cave_stats *result, struct cave_stats *val)
 {
 	int i;
 
-	for (i = 0; i < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; i++) {
+	for (i = C_STATS_START; i < C_STATS_END; i++) {
 		result->cycles[i] += val->cycles[i];
 		result->counter[i] += val->counter[i];
 		result->duration[i] += val->duration[i];
@@ -448,7 +419,7 @@ static inline void sub_stat(struct cave_stats *result, struct cave_stats *val)
 {
 	int i;
 
-	for (i = 0; i < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; i++) {
+	for (i = C_STATS_START; i < C_STATS_END; i++) {
 		result->cycles[i] -= val->cycles[i];
 		result->counter[i] -= val->counter[i];
 		result->duration[i] -= val->duration[i];
@@ -459,7 +430,7 @@ static inline void div_stat(struct cave_stats *result, struct cave_stats *val, c
 {
 	int i;
 
-	for (i = 0; i < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; i++) {
+	for (i = C_STATS_START; i < C_STATS_END; i++) {
 		result->cycles[i] = val->cycles[i] / div;
 		result->counter[i] = val->counter[i] / div;
 		result->duration[i] = val->duration[i] / div;
@@ -492,7 +463,7 @@ static struct cave_stats __stats_gather(void)
 	struct cave_stats t;
 	int i;
 	int j;
-	int cpu_cnt[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES] = { 0 };
+	int cpu_cnt[C_STATS_END] = { 0 };
 
 	memset(&t, 0, sizeof(t));
 
@@ -505,7 +476,7 @@ static struct cave_stats __stats_gather(void)
 		memset(per_cpu_ptr(&time_stats, i), 0, sizeof(struct cave_stats));
 		cave_unlock(flags);
 
-		for (j = 0; j < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; j++) {
+		for (j = C_STATS_START; j < C_STATS_END; j++) {
 			/* WARN_ON_ONCE((c.cycles[j] == 0) ^ (c.counter[j] == 0)); */
 			if (c.counter[j]) {
 				t.cycles[j] += c.cycles[j];
@@ -516,7 +487,7 @@ static struct cave_stats __stats_gather(void)
 		}
 	}
 
-	for (j = 0; j < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; j++) {
+	for (j = C_STATS_START; j < C_STATS_END; j++) {
 		if (cpu_cnt[j]) {
 			t.cycles[j] /= cpu_cnt[j];
 			t.counter[j] /= cpu_cnt[j];
@@ -601,8 +572,8 @@ static inline void wait_target_voffset(long new_voffset)
 		cpu_relax();
 
 #ifdef CONFIG_CAVE_STATS
-	t->cycles[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET] += rdtsc() - start;
-	t->counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET]++;
+	t->cycles[C_WAIT_TARGET] += rdtsc() - start;
+	t->counter[C_WAIT_TARGET]++;
 #endif
 }
 
@@ -628,8 +599,8 @@ static inline void wait_curr_voffset(long new_voffset)
 		cpu_relax();
 
 #ifdef CONFIG_CAVE_STATS
-	t->cycles[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR] += rdtsc() - start;
-	t->counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR]++;
+	t->cycles[C_WAIT_CURR] += rdtsc() - start;
+	t->counter[C_WAIT_CURR]++;
 #endif
 }
 
@@ -671,7 +642,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	start = start_measure(reason);
 #endif
 
-	cave_lock(flags, TRYLOCK_INC, start);
+	cave_lock(flags, C_TRYLOCK_INC, start);
 
 	this_cpu_write(context, *next_ctx);
 	target_voffset = target_voffset_cached;
@@ -685,7 +656,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 		cave_unlock(flags);
 
 		wait_target_voffset(new_voffset);
-		end_measure(start, CAVE_INC, reason);
+		end_measure(start, C_CAVE_INC, reason);
 
 		return;
 	}
@@ -693,7 +664,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	if (new_voffset == target_voffset) {
 		cave_unlock(flags);
 		wait_curr_voffset(new_voffset);
-		end_measure(start, SKIP_FAST, reason);
+		end_measure(start, C_SKIP_FAST, reason);
 		return;
 	}
 
@@ -714,14 +685,14 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 
 	/* new_voffset > target_voffset */
 
-	cave_lock(flags, TRYLOCK_DEC);
+	cave_lock(flags, C_TRYLOCK_DEC);
 
 	switch_path_contention--;
 
 	/* Skip cascade decreases of voltage from many CPUs */
 	if (switch_path_contention) {
 		cave_unlock(flags);
-		end_measure(start, SKIP_REPLAY, reason);
+		end_measure(start, C_SKIP_REPLAY, reason);
 		return;
 	}
 
@@ -730,13 +701,13 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 
 	if (selected_voffset == updated_voffset) {
 		cave_unlock(flags);
-		end_measure(start, SKIP_SLOW, reason);
+		end_measure(start, C_SKIP_SLOW, reason);
 		return;
 	}
 
 	if (selected_voffset < updated_voffset) {
 		cave_unlock(flags);
-		end_measure(start, SKIP_RACE, reason);
+		end_measure(start, C_SKIP_RACE, reason);
 		return;
 	}
 
@@ -754,7 +725,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	curr_voffset = selected_voffset;
 	write_voffset(selected_voffset);
 	cave_unlock(flags);
-	end_measure(start, CAVE_DEC, reason);
+	end_measure(start, C_CAVE_DEC, reason);
 }
 #else
 static inline void _cave_switch(const volatile struct cave_context *next_ctx,
@@ -773,7 +744,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	 * it may take some time until the system transitions to cave mechanism.
 	 */
 	if (new_voffset == target_voffset) {
-		end_measure(start, SKIP_FAST, reason);
+		end_measure(start, C_SKIP_FAST, reason);
 		return;
 	}
 
@@ -782,10 +753,10 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 
 	if (new_voffset < target_voffset) {
 		wait_target_voffset(new_voffset);
-		end_measure(start, CAVE_INC, reason);
+		end_measure(start, C_CAVE_INC, reason);
 	}
 	else {
-		end_measure(start, CAVE_DEC, reason);
+		end_measure(start, C_CAVE_DEC, reason);
 	}
 }
 #endif
@@ -1016,7 +987,7 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, char *name)
 	unsigned long long cycles = 0;
 	unsigned long long counter = 0;
 
-	for (j = 0; j < CAVE_SWITCH_CASES; j++) {
+	for (j = C_SWITCH_CASES_START; j < C_SWITCH_CASES_END; j++) {
 		if (t->counter[j]) {
 			cycles += t->cycles[j];
 			counter += t->counter[j];
@@ -1028,7 +999,7 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, char *name)
 
 	ret += sprintf(buf + ret, "%s_stats %llu %llu\n", name, cycles, counter);
 
-	for (j = 0; j < CAVE_SWITCH_CASES + CAVE_LOCK_CASES + CAVE_WAIT_CASES; j++) {
+	for (j = C_STATS_START; j < C_STATS_END; j++) {
 		ret += sprintf(buf + ret, "%s %llu %llu %llu\n",
 			       cave_stat_name[j],
 			       t->cycles[j],
