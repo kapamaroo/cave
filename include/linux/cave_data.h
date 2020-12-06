@@ -10,17 +10,30 @@ struct cave_context {
 typedef struct cave_data {
 	struct cave_context kernel_ctx;
 	struct cave_context user_ctx;
-	bool skip_default_user_context;
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
+	struct cave_context orig_kernel_ctx;
+	unsigned long syscall_nr;
+#endif
+	bool user_defined;
 	spinlock_t lock;
 } cave_data_t;
 
 #define CAVE_NOMINAL_VOFFSET	0
 
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
+#define INIT_TASK_SYSCALL_CONTEXT				\
+	.orig_kernel_ctx = { .voffset = CAVE_NOMINAL_VOFFSET }, \
+		.syscall_nr = 0,
+#else
+#define INIT_TASK_SYSCALL_CONTEXT
+#endif
+
 #define INIT_TASK_CAVE							\
 	.cave_data = {							\
 		.kernel_ctx = { .voffset = CAVE_NOMINAL_VOFFSET },	\
 		.user_ctx = { .voffset = CAVE_NOMINAL_VOFFSET },	\
-		.skip_default_user_context = false,			\
+		INIT_TASK_SYSCALL_CONTEXT				\
+		.user_defined = false,					\
 		.lock = __SPIN_LOCK_UNLOCKED(tsk.cave_data.lock)	\
 	},
 
