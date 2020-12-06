@@ -232,29 +232,29 @@ enum cave_stat_idx {
 	C_STATS_START = 0,
 
 	C_SWITCH_CASES_START = C_STATS_START,
-	C_CAVE_INC = C_SWITCH_CASES_START,
-	C_CAVE_DEC,
-	C_SKIP_FAST,
+	CAVE_INC = C_SWITCH_CASES_START,
+	CAVE_DEC,
+	SKIP_FAST,
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	C_SKIP_SLOW,
-	C_SKIP_REPLAY,
-	C_SKIP_RACE,
+	SKIP_SLOW,
+	SKIP_REPLAY,
+	SKIP_RACE,
 #endif
 	C_SWITCH_CASES_END,
 
 	C_TRYLOCK_CASES_START = C_SWITCH_CASES_END,
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	C_TRYLOCK_INC = C_TRYLOCK_CASES_START,
-	C_TRYLOCK_DEC,
+	TRYLOCK_INC = C_TRYLOCK_CASES_START,
+	TRYLOCK_DEC,
 	C_TRYLOCK_CASES_END,
 #else
 	C_TRYLOCK_CASES_END = C_TRYLOCK_CASES_START,
 #endif
 
 	C_WAIT_CASES_START = C_TRYLOCK_CASES_END,
-	C_WAIT_TARGET = C_WAIT_CASES_START,
+	WAIT_TARGET = C_WAIT_CASES_START,
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	C_WAIT_CURR,
+	WAIT_CURR,
 #endif
 	C_WAIT_CASES_END,
 
@@ -268,21 +268,21 @@ struct cave_stats {
 };
 
 static char *cave_stat_name[C_STATS_END] = {
-	__stringify(C_CAVE_INC),
-	__stringify(C_CAVE_DEC),
-	__stringify(C_SKIP_FAST),
+	__stringify(CAVE_INC),
+	__stringify(CAVE_DEC),
+	__stringify(SKIP_FAST),
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	__stringify(C_SKIP_SLOW),
-	__stringify(C_SKIP_REPLAY),
-	__stringify(C_SKIP_RACE),
+	__stringify(SKIP_SLOW),
+	__stringify(SKIP_REPLAY),
+	__stringify(SKIP_RACE),
 
-	__stringify(C_TRYLOCK_INC),
-	__stringify(C_TRYLOCK_DEC),
+	__stringify(TRYLOCK_INC),
+	__stringify(TRYLOCK_DEC),
 
 #endif
-	__stringify(C_WAIT_TARGET),
+	__stringify(WAIT_TARGET),
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	__stringify(C_WAIT_CURR)
+	__stringify(WAIT_CURR)
 #endif
 };
 
@@ -566,8 +566,8 @@ static inline void wait_target_voffset(long new_voffset)
 		cpu_relax();
 
 #ifdef CONFIG_CAVE_STATS
-	t->cycles[C_WAIT_TARGET] += rdtsc() - start;
-	t->counter[C_WAIT_TARGET]++;
+	t->cycles[WAIT_TARGET] += rdtsc() - start;
+	t->counter[WAIT_TARGET]++;
 #endif
 }
 
@@ -593,8 +593,8 @@ static inline void wait_curr_voffset(long new_voffset)
 		cpu_relax();
 
 #ifdef CONFIG_CAVE_STATS
-	t->cycles[C_WAIT_CURR] += rdtsc() - start;
-	t->counter[C_WAIT_CURR]++;
+	t->cycles[WAIT_CURR] += rdtsc() - start;
+	t->counter[WAIT_CURR]++;
 #endif
 }
 
@@ -631,7 +631,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 
 	start = start_measure(reason);
 
-	cave_lock(flags, C_TRYLOCK_INC, start);
+	cave_lock(flags, TRYLOCK_INC, start);
 
 	this_cpu_write(context, *next_ctx);
 	target_voffset = target_voffset_cached;
@@ -645,7 +645,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 		cave_unlock(flags);
 
 		wait_target_voffset(new_voffset);
-		end_measure(start, C_CAVE_INC, reason);
+		end_measure(start, CAVE_INC, reason);
 
 		return;
 	}
@@ -653,7 +653,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	if (new_voffset == target_voffset) {
 		cave_unlock(flags);
 		wait_curr_voffset(new_voffset);
-		end_measure(start, C_SKIP_FAST, reason);
+		end_measure(start, SKIP_FAST, reason);
 		return;
 	}
 
@@ -674,14 +674,14 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 
 	/* new_voffset > target_voffset */
 
-	cave_lock(flags, C_TRYLOCK_DEC);
+	cave_lock(flags, TRYLOCK_DEC);
 
 	switch_path_contention--;
 
 	/* Skip cascade decreases of voltage from many CPUs */
 	if (switch_path_contention) {
 		cave_unlock(flags);
-		end_measure(start, C_SKIP_REPLAY, reason);
+		end_measure(start, SKIP_REPLAY, reason);
 		return;
 	}
 
@@ -690,13 +690,13 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 
 	if (selected_voffset == updated_voffset) {
 		cave_unlock(flags);
-		end_measure(start, C_SKIP_SLOW, reason);
+		end_measure(start, SKIP_SLOW, reason);
 		return;
 	}
 
 	if (selected_voffset < updated_voffset) {
 		cave_unlock(flags);
-		end_measure(start, C_SKIP_RACE, reason);
+		end_measure(start, SKIP_RACE, reason);
 		return;
 	}
 
@@ -714,7 +714,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	curr_voffset = selected_voffset;
 	write_voffset(selected_voffset);
 	cave_unlock(flags);
-	end_measure(start, C_CAVE_DEC, reason);
+	end_measure(start, CAVE_DEC, reason);
 }
 #else
 static inline void _cave_switch(const volatile struct cave_context *next_ctx,
@@ -731,7 +731,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	 * it may take some time until the system transitions to cave mechanism.
 	 */
 	if (new_voffset == target_voffset) {
-		end_measure(start, C_SKIP_FAST, reason);
+		end_measure(start, SKIP_FAST, reason);
 		return;
 	}
 
@@ -740,10 +740,10 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 
 	if (new_voffset < target_voffset) {
 		wait_target_voffset(new_voffset);
-		end_measure(start, C_CAVE_INC, reason);
+		end_measure(start, CAVE_INC, reason);
 	}
 	else {
-		end_measure(start, C_CAVE_DEC, reason);
+		end_measure(start, CAVE_DEC, reason);
 	}
 }
 #endif
@@ -986,11 +986,11 @@ static int _print_cave_stats(char *buf, struct cave_stats *t, char *name)
 			       );
 	}
 
-#define T_WAIT_TARGET(__m)	(t->__m[C_WAIT_TARGET])
+#define T_WAIT_TARGET(__m)	(t->__m[WAIT_TARGET])
 
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-#define T_WAIT_CURR(__m)	(t->__m[C_WAIT_CURR])
-#define T_TRYLOCK(__m)		(t->__m[C_TRYLOCK_INC] + t->__m[C_TRYLOCK_DEC])
+#define T_WAIT_CURR(__m)	(t->__m[WAIT_CURR])
+#define T_TRYLOCK(__m)		(t->__m[TRYLOCK_INC] + t->__m[TRYLOCK_DEC])
 #else
 #define T_WAIT_CURR(__m)	(0)
 #define T_TRYLOCK(__m)		(0)
