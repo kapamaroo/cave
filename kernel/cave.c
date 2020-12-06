@@ -856,19 +856,23 @@ __visible void cave_syscall_exit_switch(void)
 
 void cave_guest_entry(void)
 {
+	volatile struct cave_context *context = &current->cave_data.user_ctx;
+
 	if (!cave_enabled)
 		return;
 
-	_cave_switch(&current->cave_data.user_ctx, ENTRY);
+	_cave_switch(context, ENTRY);
 }
 EXPORT_SYMBOL_GPL(cave_guest_entry);
 
 void cave_guest_exit(void)
 {
+	volatile struct cave_context *context = &cave_kernel_context;
+
 	if (!cave_enabled)
 		return;
 
-	_cave_switch(&cave_kernel_context, EXIT);
+	_cave_switch(context, EXIT);
 }
 EXPORT_SYMBOL_GPL(cave_guest_exit);
 
