@@ -15,14 +15,8 @@
 
 /* Arch specific */
 
-/*
-mask instead of compare
-#define _TO_VOFFSET_DATA(__val)         (((0x800ULL - (((u64)__val))) & 0x7FF) << 21)
-#define _TO_VOFFSET_VAL(__data)         ((0x800ULL - ((u64)__data >> 21)) & 0x7FF)
-*/
-
-#define TO_VOFFSET_DATA(__val)	(__val ? (0x800ULL - (u64)__val) << 21 : 0ULL)
-#define TO_VOFFSET_VAL(__data)    (__data ? (0x800ULL - ((u64)__data >> 21)) : 0ULL)
+#define TO_VOFFSET_DATA(__val)         (((0x800ULL - ((u64)__val)) & 0x7FF) << 21)
+#define TO_VOFFSET_VAL(__data)         ((0x800ULL - ((u64)__data >> 21)) & 0x7FF)
 
 #define CORE_VOFFSET_VAL(__val)		(0x8000001100000000ULL | TO_VOFFSET_DATA(__val))
 #define CACHE_VOFFSET_VAL(__val)	(0x8000021100000000ULL | TO_VOFFSET_DATA(__val))
