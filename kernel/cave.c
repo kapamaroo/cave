@@ -292,15 +292,9 @@ static char *cave_stat_name[C_STATS_END] = {
 
 DEFINE_PER_CPU(struct cave_stats, time_stats);
 
-static inline unsigned long long start_measure(const enum reason reason)
+static inline unsigned long long _start_measure(const enum reason reason)
 {
 	unsigned long long ret;
-
-#ifdef CONFIG_CAVE_RAW_VOLTAGE_LOGGING
-	if (reason == EXIT_SYSCALL)
-		&& test_bit(this_cpu_read(syscall_num), syscall_enabled)
-			trace_printk("%d %llu", smp_processor_id(), read_voltage_msr());
-#endif
 
 	ret = rdtsc();
 
@@ -318,10 +312,20 @@ static inline void _end_measure(unsigned long long start, enum cave_stat_idx c,
 
 	t->cycles[c] += cycles;
 	t->counter[c]++;
+
+#ifdef CONFIG_CAVE_RAW_VOLTAGE_LOGGING
+	if (reason == EXIT_SYSCALL)
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
+		&& test_bit(this_cpu_read(syscall_num), syscall_enabled)
+#endif
+			trace_printk("%d %llu", smp_processor_id(), read_voltage_msr());
+#endif
 }
 
+#define start_measure(r)		_start_measure(r)
 #define end_measure(start, c, r)	_end_measure(start, c, r)
 #else
+#define start_measure(r)		0
 #define end_measure(start, c, r)
 #endif
 
@@ -621,10 +625,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	long updated_voffset;
 	long selected_voffset;
 	static int switch_path_contention = 0;
-
-#ifdef CONFIG_CAVE_STATS
 	unsigned long long start;
-#endif
 
 	/* This fast path works after cave_apply_tasks() completes. Until then,
 	 * it may take some time until the system transitions to cave mechanism.
@@ -632,9 +633,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	if (next_ctx->voffset == this_cpu_read(context).voffset)
 		return;
 
-#ifdef CONFIG_CAVE_STATS
 	start = start_measure(reason);
-#endif
 
 	cave_lock(flags, C_TRYLOCK_INC, start);
 
@@ -727,11 +726,9 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 {
 	long target_voffset = this_cpu_read(context).voffset;
 	long new_voffset = next_ctx->voffset;
-
-#ifdef CONFIG_CAVE_STATS
 	unsigned long long start;
+
 	start = start_measure(reason);
-#endif
 
 	/*
 	 * This fast path works after cave_apply_tasks() completes. Until then,
