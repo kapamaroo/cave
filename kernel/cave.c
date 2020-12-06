@@ -13,31 +13,37 @@
 #include <linux/vmalloc.h>
 #include <generated/asm-offsets.h>
 
-#define CAVE_CONTEXT(__v)	((struct cave_context){ .voffset = __v })
+/* Arch specific */
 
-static volatile int cave_enabled = 0;
+/*
+mask instead of compare
+#define _TO_VOFFSET_DATA(__val)         (((0x800ULL - (((u64)__val))) & 0x7FF) << 21)
+#define _TO_VOFFSET_VAL(__data)         ((0x800ULL - ((u64)__data >> 21)) & 0x7FF)
+*/
 
-#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
-static volatile int cave_syscall_context_enabled = 0;
-DECLARE_BITMAP(syscall_enabled, __NR_syscall_max);
-static struct kobject *syscall_enabled_kobj;
-static volatile struct cave_context cave_syscall_context __read_mostly = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
-#endif
+#define TO_VOFFSET_DATA(__val)	(__val ? (0x800ULL - (u64)__val) << 21 : 0ULL)
+#define TO_VOFFSET_VAL(__data)    (__data ? (0x800ULL - ((u64)__data >> 21)) : 0ULL)
 
-static bool cave_nowait __read_mostly = false;
+#define CORE_VOFFSET_VAL(__val)		(0x8000001100000000ULL | TO_VOFFSET_DATA(__val))
+#define CACHE_VOFFSET_VAL(__val)	(0x8000021100000000ULL | TO_VOFFSET_DATA(__val))
 
-enum reason {
-	ENTRY = 0,
-	EXIT,
-	ENTRY_SYSCALL,
-	EXIT_SYSCALL,
-	CONTEXT_SWITCH
-};
+static inline void write_voffset_msr(u64 voffset)
+{
+	wrmsrl(0x150, CORE_VOFFSET_VAL(voffset));
+	wrmsrl(0x150, CACHE_VOFFSET_VAL(voffset));
+}
 
-#ifdef CONFIG_CAVE_RAW_VOLTAGE_LOGGING
-DEFINE_PER_CPU(unsigned long, syscall_num);
+static inline u64 read_voffset_msr(void)
+{
+	u64 voffset;
 
-static u64 read_voltage(void)
+	wrmsrl(0x150, 0x8000001000000000);
+	rdmsrl(0x150, voffset);
+
+	return TO_VOFFSET_VAL(voffset);
+}
+
+static u64 read_voltage_msr(void)
 {
 	u64 value;
 
@@ -51,30 +57,73 @@ static u64 read_voltage(void)
 	return value;
 }
 
-#if 0
-static void trace_avg_voltage(u64 voltage)
-{
-	const int MAX = 1000;
-	static int sample = 0;
-	static int avg = 0;
+/* ************************************************************************** */
 
-	avg += voltage;
-	if (++sample == MAX) {
-		trace_printk("cave: cpu%d voltage=%u avg=%d\n",
-			     smp_processor_id(), voltage, avg / MAX);
-		sample = 0;
-		avg = 0;
+#define CAVE_CONTEXT(__v)	((struct cave_context){ .voffset = __v })
+
+static volatile int cave_enabled = 0;
+static bool cave_nowait __read_mostly = false;
+
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
+static volatile long target_voffset_cached = CAVE_NOMINAL_VOFFSET;
+static volatile long curr_voffset = CAVE_NOMINAL_VOFFSET;
+#endif
+
+#ifdef CONFIG_CAVE_SKIP_MSR_RW
+static bool skip_msr __read_mostly = false;
+#endif
+
+#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
+static volatile int cave_syscall_context_enabled = 0;
+DECLARE_BITMAP(syscall_enabled, __NR_syscall_max);
+static struct kobject *syscall_enabled_kobj;
+static volatile struct cave_context cave_syscall_context __read_mostly = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
+#endif
+
+#ifdef CONFIG_CAVE_RAW_VOLTAGE_LOGGING
+DEFINE_PER_CPU(unsigned long, syscall_num);
+#endif
+
+static inline void write_voffset(u64 voffset)
+{
+#ifdef CONFIG_CAVE_SKIP_MSR_RW
+	if (unlikely(skip_msr))
+		return;
+#endif
+
+	write_voffset_msr(voffset);
+}
+
+static inline u64 read_voffset(void)
+{
+	u64 voffset;
+
+#ifdef CONFIG_CAVE_SKIP_MSR_RW
+	if (unlikely(skip_msr)) {
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
+		return target_voffset_cached;
+#else
+		return this_cpu_read(context).voffset;
+#endif
 	}
-	barrier();
-}
 #endif
 
-static void log_voltage(void)
-{
-	if (cave_enabled)
-		trace_printk("%d %llu", smp_processor_id(), read_voltage());
-}
+	voffset = read_voffset_msr();
+
+#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
+	curr_voffset = voffset;
 #endif
+
+	return voffset;
+}
+
+enum reason {
+	ENTRY = 0,
+	EXIT,
+	ENTRY_SYSCALL,
+	EXIT_SYSCALL,
+	CONTEXT_SWITCH
+};
 
 enum cave_switch_case {
 	CAVE_INC = 0,
@@ -232,8 +281,9 @@ enum cave_stat_idx {
 
 	C_WAIT_TARGET = CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET,
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	C_WAIT_CURR = CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR
+	C_WAIT_CURR = CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR,
 #endif
+	C_STATS
 };
 
 struct cave_stats {
@@ -268,12 +318,9 @@ static inline unsigned long long start_measure(const enum reason reason)
 	unsigned long long ret;
 
 #ifdef CONFIG_CAVE_RAW_VOLTAGE_LOGGING
-	if (reason == EXIT_SYSCALL) {
-		unsigned long syscall_nr = this_cpu_read(syscall_num);
-
-		if (test_bit(syscall_nr, syscall_enabled))
-			log_voltage();
-	}
+	if (reason == EXIT_SYSCALL)
+		&& test_bit(this_cpu_read(syscall_num), syscall_enabled)
+			trace_printk("%d %llu", smp_processor_id(), read_voltage_msr());
 #endif
 
 	ret = rdtsc();
@@ -360,17 +407,8 @@ static volatile struct cave_context cave_user_context __read_mostly = CAVE_CONTE
 
 DEFINE_PER_CPU(struct cave_context, context) = CAVE_CONTEXT(CAVE_NOMINAL_VOFFSET);
 
-#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-static volatile long target_voffset_cached = CAVE_NOMINAL_VOFFSET;
-static volatile long curr_voffset = CAVE_NOMINAL_VOFFSET;
-#endif
-
 #ifdef CONFIG_CAVE_STATS
 static DEFINE_SPINLOCK(cave_stat_avg_lock);
-
-#ifdef CONFIG_CAVE_SKIP_MSR_RW
-static bool skip_msr __read_mostly = false;
-#endif
 
 #define FSHIFT	11
 #define FIXED_1	(1 << FSHIFT)
@@ -545,75 +583,30 @@ static void stats_clear(void)
 }
 #endif
 
-/* Arch specific */
-
-/*
-mask instead of compare
-#define _TO_VOFFSET_DATA(__val)         (((0x800ULL - (((u64)__val))) & 0x7FF) << 21)
-#define _TO_VOFFSET_VAL(__data)         ((0x800ULL - ((u64)__data >> 21)) & 0x7FF)
-*/
-
-#define TO_VOFFSET_DATA(__val)	(__val ? (0x800ULL - (u64)__val) << 21 : 0ULL)
-#define TO_VOFFSET_VAL(__data)    (__data ? (0x800ULL - ((u64)__data >> 21)) : 0ULL)
-
-#define CORE_VOFFSET_VAL(__val)		(0x8000001100000000ULL | TO_VOFFSET_DATA(__val))
-#define CACHE_VOFFSET_VAL(__val)	(0x8000021100000000ULL | TO_VOFFSET_DATA(__val))
-
-static inline void write_voffset_msr(u64 voffset)
+static inline void wait_target_voffset(long new_voffset)
 {
-#ifdef CONFIG_CAVE_SKIP_MSR_RW
-	if (unlikely(skip_msr))
+#ifdef CONFIG_CAVE_STATS
+	unsigned long long start;
+	struct cave_stats *t = this_cpu_ptr(&time_stats);
+#endif
+
+	if (cave_nowait)
 		return;
+
+#ifdef CONFIG_CAVE_STATS
+	start = rdtsc();
 #endif
 
-	wrmsrl(0x150, CORE_VOFFSET_VAL(voffset));
-	wrmsrl(0x150, CACHE_VOFFSET_VAL(voffset));
+	while (new_voffset < read_voffset())
+		cpu_relax();
+
+#ifdef CONFIG_CAVE_STATS
+	t->cycles[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET] += rdtsc() - start;
+	t->counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET]++;
+#endif
 }
-
-static inline u64 read_voffset_msr(void)
-{
-	u64 voffset;
-
-#ifdef CONFIG_CAVE_SKIP_MSR_RW
-	if (unlikely(skip_msr))
-#ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-		return target_voffset_cached;
-#else
-		return this_cpu_read(context).voffset;
-#endif
-#endif
-
-	wrmsrl(0x150, 0x8000001000000000);
-	rdmsrl(0x150, voffset);
-
-	return TO_VOFFSET_VAL(voffset);
-}
-
-/* ************************************************************************** */
 
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-static void write_target_voffset(long new_voffset)
-{
-	target_voffset_cached = new_voffset;
-}
-
-static void write_curr_voffset(long new_voffset)
-{
-	curr_voffset = new_voffset;
-}
-
-static void write_voffset(long voffset)
-{
-	write_target_voffset(voffset);
-	write_curr_voffset(voffset);
-	write_voffset_msr(voffset);
-}
-
-static long read_target_voffset(void)
-{
-	return target_voffset_cached;
-}
-
 static inline void wait_curr_voffset(long new_voffset)
 {
 #ifdef CONFIG_CAVE_STATS
@@ -637,29 +630,6 @@ static inline void wait_curr_voffset(long new_voffset)
 #ifdef CONFIG_CAVE_STATS
 	t->cycles[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR] += rdtsc() - start;
 	t->counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_CURR]++;
-#endif
-}
-
-static inline void wait_target_voffset(long new_voffset)
-{
-#ifdef CONFIG_CAVE_STATS
-	unsigned long long start;
-	struct cave_stats *t = this_cpu_ptr(&time_stats);
-#endif
-
-	if (cave_nowait)
-		return;
-
-#ifdef CONFIG_CAVE_STATS
-	start = rdtsc();
-#endif
-
-	while (new_voffset < (curr_voffset = read_voffset_msr()))
-		cpu_relax();
-
-#ifdef CONFIG_CAVE_STATS
-	t->cycles[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET] += rdtsc() - start;
-	t->counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET]++;
 #endif
 }
 
@@ -704,13 +674,13 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	cave_lock(flags, TRYLOCK_INC, start);
 
 	this_cpu_write(context, *next_ctx);
-	target_voffset = read_target_voffset();
+	target_voffset = target_voffset_cached;
 	new_voffset = next_ctx->voffset;
 
 	/* increase voltage immediately */
 	if (new_voffset < target_voffset) {
-		write_target_voffset(new_voffset);
-		write_voffset_msr(new_voffset);
+		target_voffset_cached = new_voffset;
+		write_voffset(new_voffset);
 
 		cave_unlock(flags);
 
@@ -756,7 +726,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	}
 
 	selected_voffset = select_voffset();
-	updated_voffset = read_target_voffset();
+	updated_voffset = target_voffset_cached;
 
 	if (selected_voffset == updated_voffset) {
 		cave_unlock(flags);
@@ -780,34 +750,13 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	 * when a CPU decreases the voltage it holds the lock, therefore it
 	 * prohibits another CPU to increase the voltage.
 	 */
+	target_voffset_cached = selected_voffset;
+	curr_voffset = selected_voffset;
 	write_voffset(selected_voffset);
 	cave_unlock(flags);
 	end_measure(start, CAVE_DEC, reason);
 }
 #else
-static inline void wait_target_voffset(long new_voffset)
-{
-#ifdef CONFIG_CAVE_STATS
-	unsigned long long start;
-	struct cave_stats *t = this_cpu_ptr(&time_stats);
-#endif
-
-	if (cave_nowait)
-		return;
-
-#ifdef CONFIG_CAVE_STATS
-	start = rdtsc();
-#endif
-
-	while (new_voffset < read_voffset_msr())
-		cpu_relax();
-
-#ifdef CONFIG_CAVE_STATS
-	t->cycles[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET] += rdtsc() - start;
-	t->counter[CAVE_SWITCH_CASES + CAVE_LOCK_CASES + WAIT_TARGET]++;
-#endif
-}
-
 static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 				const enum reason reason)
 {
@@ -829,7 +778,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 	}
 
 	this_cpu_write(context, *next_ctx);
-	write_voffset_msr(new_voffset);
+	write_voffset(new_voffset);
 
 	if (new_voffset < target_voffset) {
 		wait_target_voffset(new_voffset);
@@ -1467,14 +1416,14 @@ ssize_t voltage_show(struct kobject *kobj, struct kobj_attribute *attr, char *bu
 	unsigned long flags;
 
 	cave_lock(flags);
-	voffset = read_target_voffset();
+	voffset = target_voffset_cached;
 	cave_unlock(flags);
 #else
 	voffset = this_cpu_read(context).voffset;
 #endif
 
 	ret += sprintf(buf + ret, "voffset %ld\n", -voffset);
-
+	ret += sprintf(buf + ret, "voltage %lld\n", read_voltage_msr());
 	return ret;
 }
 
@@ -1826,12 +1775,12 @@ int cave_init(void)
 
 	cave_lock(flags);
 
-	voffset = read_voffset_msr();
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
-	write_voffset(CAVE_NOMINAL_VOFFSET);
-#else
-	write_voffset_msr(CAVE_NOMINAL_VOFFSET);
+	target_voffset_cached = CAVE_NOMINAL_VOFFSET;
+	curr_voffset = CAVE_NOMINAL_VOFFSET;
 #endif
+	write_voffset_msr(CAVE_NOMINAL_VOFFSET);
+	voffset = read_voffset_msr();
 	cave_unlock(flags);
 
 	pr_info("cave: msr offset: %ld\n", -voffset);
