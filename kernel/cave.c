@@ -939,6 +939,7 @@ static void cave_apply_tasks(void)
 		idle_task(i)->cave_data.user_ctx = cave_user_context;
 	}
 
+	read_lock(&tasklist_lock);
 	for_each_process_thread(g, p) {
 		spin_lock_irqsave(&p->cave_data.lock, flags);
 		if (!p->cave_data.user_defined) {
@@ -947,6 +948,7 @@ static void cave_apply_tasks(void)
 		}
 		spin_unlock_irqrestore(&p->cave_data.lock, flags);
 	}
+	read_unlock(&tasklist_lock);
 }
 
 #ifdef CONFIG_CAVE_STATS
