@@ -21,13 +21,13 @@
 #define CORE_VOFFSET_VAL(__val)		(0x8000001100000000ULL | TO_VOFFSET_DATA(__val))
 #define CACHE_VOFFSET_VAL(__val)	(0x8000021100000000ULL | TO_VOFFSET_DATA(__val))
 
-static inline void write_voffset_msr(u64 voffset)
+static inline void arch_write_voffset(u64 voffset)
 {
 	wrmsrl(0x150, CORE_VOFFSET_VAL(voffset));
 	wrmsrl(0x150, CACHE_VOFFSET_VAL(voffset));
 }
 
-static inline u64 read_voffset_msr(void)
+static inline u64 arch_read_voffset(void)
 {
 	u64 voffset;
 
@@ -37,7 +37,7 @@ static inline u64 read_voffset_msr(void)
 	return TO_VOFFSET_VAL(voffset);
 }
 
-static u64 read_voltage_msr(void)
+static u64 arch_read_voltage(void)
 {
 	u64 value;
 
@@ -81,7 +81,7 @@ static inline void write_voffset(u64 voffset)
 		return;
 #endif
 
-	write_voffset_msr(voffset);
+	arch_write_voffset(voffset);
 }
 
 static inline u64 read_voffset(void)
@@ -98,7 +98,7 @@ static inline u64 read_voffset(void)
 	}
 #endif
 
-	voffset = read_voffset_msr();
+	voffset = arch_read_voffset();
 
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 	curr_voffset = voffset;
@@ -314,7 +314,7 @@ static inline void _end_measure(unsigned long long start, enum cave_stat_idx c,
 #ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 		&& test_bit(current->cave_data.syscall_nr, syscall_enabled)
 #endif
-			trace_printk("%d %llu", smp_processor_id(), read_voltage_msr());
+			trace_printk("%d %llu", smp_processor_id(), arch_read_voltage());
 #endif
 }
 
@@ -1370,7 +1370,7 @@ ssize_t voltage_show(struct kobject *kobj, struct kobj_attribute *attr, char *bu
 #endif
 
 	ret += sprintf(buf + ret, "voffset %ld\n", -voffset);
-	ret += sprintf(buf + ret, "voltage %lld\n", read_voltage_msr());
+	ret += sprintf(buf + ret, "voltage %lld\n", arch_read_voltage());
 	return ret;
 }
 
@@ -1726,8 +1726,8 @@ int cave_init(void)
 	target_voffset_cached = CAVE_NOMINAL_VOFFSET;
 	curr_voffset = CAVE_NOMINAL_VOFFSET;
 #endif
-	write_voffset_msr(CAVE_NOMINAL_VOFFSET);
-	voffset = read_voffset_msr();
+	arch_write_voffset(CAVE_NOMINAL_VOFFSET);
+	voffset = arch_read_voffset();
 	cave_unlock(flags);
 
 	pr_info("cave: msr offset: %ld\n", -voffset);
