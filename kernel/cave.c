@@ -1644,7 +1644,7 @@ KERNEL_ATTR_RW(syscall_rate_period);
 	HELPERS(__nr, __sys)			\
 	KERNEL_ATTR_RW(__sys);			\
 
-#include <generated/asm/syscalls_64.h>
+#include "../arch/x86/include/generated/asm/syscalls_64.h"
 
 #undef HELPERS
 #undef __SYSCALL_64
@@ -1652,7 +1652,7 @@ KERNEL_ATTR_RW(syscall_rate_period);
 static struct attribute_group syscall_enabled_attr_group = {
 	.attrs = (struct attribute * []) {
 #define __SYSCALL_64(__nr, __sys, __qual)	&__sys##_attr.attr,
-#include <generated/asm/syscalls_64.h>
+#include "../arch/x86/include/generated/asm/syscalls_64.h"
 #undef __SYSCALL_64
 		NULL
 	}
