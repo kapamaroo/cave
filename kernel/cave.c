@@ -1732,45 +1732,47 @@ int cave_init(void)
 }
 late_initcall(cave_init);
 
-#define CAVE_SET_TASK_VOFFSET	128
-#define CAVE_LOOP		129
+#define CAVE_KEEP_VOFFSET	(0xFFFF)
+#define CAVE_SET_VOFFSET	128
 
-SYSCALL_DEFINE3(cave_ctl, int, action, int, op1, int, op2)
+SYSCALL_DEFINE4(cave_ctl, int, action, int, pid, int, kernel_voffset, int, user_voffset)
 {
-	struct task_struct *p = current;
-	long voffset;
+	struct task_struct *p;
 	unsigned long flags;
 
 	switch (action) {
-	case CAVE_SET_TASK_VOFFSET:
-		if (op1 > 0) {
-			p = find_task_by_vpid(op1);
-			if (!p)
-				return -EINVAL;
-		}
-		voffset = op2;
-		if (voffset < 0 || voffset > cave_max_context.voffset)
+	case CAVE_SET_VOFFSET:
+		if (pid == 0)
+			p = current;
+		else if (pid > 0 && (p = find_task_by_vpid(pid)))
+			;  /* ok */
+		else
+			return -EINVAL;
+
+		if (kernel_voffset != CAVE_KEEP_VOFFSET
+		    && (kernel_voffset < 0 || kernel_voffset > cave_max_context.voffset))
+			return -EINVAL;
+		if (user_voffset != CAVE_KEEP_VOFFSET
+		    && (user_voffset < 0 || user_voffset > cave_max_context.voffset))
 			return -EINVAL;
 
 		spin_lock_irqsave(&p->cave_data.lock, flags);
-		p->cave_data.user_ctx = CAVE_CONTEXT(voffset);
-		p->cave_data.user_defined = true;
+		if (kernel_voffset != CAVE_KEEP_VOFFSET) {
+			p->cave_data.kernel_ctx = CAVE_CONTEXT(kernel_voffset);
+			p->cave_data.user_defined = true;
+		}
+		if (user_voffset != CAVE_KEEP_VOFFSET) {
+			p->cave_data.user_ctx = CAVE_CONTEXT(user_voffset);
+			p->cave_data.user_defined = true;
+		}
 		spin_unlock_irqrestore(&p->cave_data.lock, flags);
 
-		pr_info("cave: %s [pid=%d] set voffset=%ld\n",
-			p->comm, task_pid_vnr(p), voffset);
+		pr_info("cave: %s [pid=%d] set voffset: kernel=%ld, user=%ld\n",
+			p->comm, task_pid_vnr(p),
+			p->cave_data.kernel_ctx.voffset,
+			p->cave_data.user_ctx.voffset);
 
 		return 0;
-	case CAVE_LOOP:
-		{
-			int i;
-			unsigned long sum = 0;
-
-			for (i = 0; i < op1; i++)
-				sum += op1 + op2 * i;
-
-			return sum;
-		}
 	}
 
 	return -EINVAL;
