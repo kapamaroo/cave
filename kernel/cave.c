@@ -760,8 +760,10 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 
 #ifdef CONFIG_CAVE_SYSCALL_CONTEXT
 	current->cave_data.syscall_nr = syscall_nr;
-	if (cave_syscall_context_enabled && test_bit(syscall_nr, syscall_enabled))
+	if (cave_syscall_context_enabled && test_bit(syscall_nr, syscall_enabled)) {
+		current->cave_data.orig_kernel_ctx = current->cave_data.kernel_ctx;
 		current->cave_data.kernel_ctx = cave_syscall_context;
+	}
 #endif
 
 #ifdef CONFIG_CAVE_SYSCALL_RATELIMIT
@@ -903,9 +905,6 @@ void cave_fork_init(struct task_struct *p)
 	if (!p->cave_data.user_defined) {
 		p->cave_data.kernel_ctx = cave_kernel_context;
 		p->cave_data.user_ctx = cave_user_context;
-#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
-		p->cave_data.orig_kernel_ctx = cave_kernel_context;
-#endif
 	}
 }
 
@@ -938,9 +937,6 @@ static void cave_apply_tasks(void)
 	for_each_possible_cpu(i) {
 		idle_task(i)->cave_data.kernel_ctx = cave_user_context;
 		idle_task(i)->cave_data.user_ctx = cave_user_context;
-#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
-		idle_task(i)->cave_data.orig_kernel_ctx = cave_kernel_context;
-#endif
 	}
 
 	for_each_process_thread(g, p) {
@@ -948,9 +944,6 @@ static void cave_apply_tasks(void)
 		if (!p->cave_data.user_defined) {
 			p->cave_data.kernel_ctx = cave_kernel_context;
 			p->cave_data.user_ctx = cave_user_context;
-#ifdef CONFIG_CAVE_SYSCALL_CONTEXT
-			p->cave_data.orig_kernel_ctx = cave_kernel_context;
-#endif
 		}
 		spin_unlock_irqrestore(&p->cave_data.lock, flags);
 	}
