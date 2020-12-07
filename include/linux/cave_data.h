@@ -14,7 +14,8 @@ typedef struct cave_data {
 	struct cave_context orig_kernel_ctx;
 	unsigned long syscall_nr;
 #endif
-	bool user_defined;
+	bool custom_user_ctx;
+	bool custom_kernel_ctx;
 	spinlock_t lock;
 } cave_data_t;
 
@@ -33,7 +34,8 @@ typedef struct cave_data {
 		.kernel_ctx = { .voffset = CAVE_NOMINAL_VOFFSET },	\
 		.user_ctx = { .voffset = CAVE_NOMINAL_VOFFSET },	\
 		INIT_TASK_SYSCALL_CONTEXT				\
-		.user_defined = false,					\
+		.custom_kernel_ctx = false,				\
+		.custom_user_ctx = false,				\
 		.lock = __SPIN_LOCK_UNLOCKED(tsk.cave_data.lock)	\
 	},
 

@@ -773,7 +773,8 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
          */
 
 	/* track cave tasks */
-	if (current->cave_data.user_defined)
+	if (current->cave_data.custom_kernel_ctx
+	    || current->cave_data.custom_user_ctx)
 		p->counter++;
 
         if (unlikely(!p->enabled))
@@ -890,7 +891,8 @@ void cave_exec_task(struct task_struct *p)
 	if (p->flags & PF_KTHREAD) {
 		spin_lock_irqsave(&p->cave_data.lock, flags);
 		p->cave_data.user_ctx = cave_user_context;
-		p->cave_data.user_defined = false;
+		p->cave_data.custom_kernel_ctx= false;
+		p->cave_data.custom_user_ctx = false;
 		spin_unlock_irqrestore(&p->cave_data.lock, flags);
 	}
 }
@@ -902,10 +904,10 @@ void cave_fork_init(struct task_struct *p)
 {
 	spin_lock_init(&p->cave_data.lock);
 
-	if (!p->cave_data.user_defined) {
+	if (!p->cave_data.custom_kernel_ctx)
 		p->cave_data.kernel_ctx = cave_kernel_context;
+	if (!p->cave_data.custom_user_ctx)
 		p->cave_data.user_ctx = cave_user_context;
-	}
 }
 
 /*
@@ -942,10 +944,10 @@ static void cave_apply_tasks(void)
 	read_lock(&tasklist_lock);
 	for_each_process_thread(g, p) {
 		spin_lock_irqsave(&p->cave_data.lock, flags);
-		if (!p->cave_data.user_defined) {
+		if (!p->cave_data.custom_kernel_ctx)
 			p->cave_data.kernel_ctx = cave_kernel_context;
+		if (!p->cave_data.custom_user_ctx)
 			p->cave_data.user_ctx = cave_user_context;
-		}
 		spin_unlock_irqrestore(&p->cave_data.lock, flags);
 	}
 	read_unlock(&tasklist_lock);
@@ -1761,11 +1763,11 @@ SYSCALL_DEFINE4(cave_ctl, int, action, int, pid, int, kernel_voffset, int, user_
 		spin_lock_irqsave(&p->cave_data.lock, flags);
 		if (kernel_voffset != CAVE_KEEP_VOFFSET) {
 			p->cave_data.kernel_ctx = CAVE_CONTEXT(kernel_voffset);
-			p->cave_data.user_defined = true;
+			p->cave_data.custom_kernel_ctx = true;
 		}
 		if (user_voffset != CAVE_KEEP_VOFFSET) {
 			p->cave_data.user_ctx = CAVE_CONTEXT(user_voffset);
-			p->cave_data.user_defined = true;
+			p->cave_data.custom_user_ctx = true;
 		}
 		spin_unlock_irqrestore(&p->cave_data.lock, flags);
 
