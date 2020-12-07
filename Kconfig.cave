@@ -14,8 +14,8 @@ config CAVE_SYSCALL_RATELIMIT
         default n
         depends on CAVE
 
-config CAVE_SKIP_MSR_RW
-        bool "Skip msr voltage."
+config CAVE_SKIP_ARCH_RW
+        bool "Skip architecture changes to voltage."
         default n
 	depends on CAVE
 

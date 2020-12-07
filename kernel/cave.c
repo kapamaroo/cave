@@ -63,8 +63,8 @@ static volatile long target_voffset_cached = CAVE_NOMINAL_VOFFSET;
 static volatile long curr_voffset = CAVE_NOMINAL_VOFFSET;
 #endif
 
-#ifdef CONFIG_CAVE_SKIP_MSR_RW
-static bool skip_msr __read_mostly = false;
+#ifdef CONFIG_CAVE_SKIP_ARCH_RW
+static bool skip_arch __read_mostly = false;
 #endif
 
 #ifdef CONFIG_CAVE_SYSCALL_CONTEXT
@@ -76,8 +76,8 @@ static volatile struct cave_context cave_syscall_context __read_mostly = CAVE_CO
 
 static inline void write_voffset(u64 voffset)
 {
-#ifdef CONFIG_CAVE_SKIP_MSR_RW
-	if (unlikely(skip_msr))
+#ifdef CONFIG_CAVE_SKIP_ARCH_RW
+	if (unlikely(skip_arch))
 		return;
 #endif
 
@@ -88,8 +88,8 @@ static inline u64 read_voffset(void)
 {
 	u64 voffset;
 
-#ifdef CONFIG_CAVE_SKIP_MSR_RW
-	if (unlikely(skip_msr)) {
+#ifdef CONFIG_CAVE_SKIP_ARCH_RW
+	if (unlikely(skip_arch)) {
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 		return target_voffset_cached;
 #else
@@ -1438,8 +1438,8 @@ ssize_t debug_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
 	int ret = 0;
 
-#ifdef CONFIG_CAVE_SKIP_MSR_RW
-	ret += sprintf(buf + ret, "option:skip_msr = %s\n", skip_msr ? "true" : "false");
+#ifdef CONFIG_CAVE_SKIP_ARCH_RW
+	ret += sprintf(buf + ret, "option:skip_arch = %s\n", skip_arch ? "true" : "false");
 #endif
 #ifdef CONFIG_CAVE_COMMON_VOLTAGE_DOMAIN
 	ret += sprintf(buf + ret, "config:one_voltage_domain\n");
@@ -1458,13 +1458,13 @@ static
 ssize_t debug_store(struct kobject *kobj, struct kobj_attribute *attr,
 		    const char *buf, size_t count)
 {
-#ifdef CONFIG_CAVE_SKIP_MSR_RW
+#ifdef CONFIG_CAVE_SKIP_ARCH_RW
 	int val = 0;
 
-	sscanf(buf, "skip_msr = %d", &val);
-	if ((val == 1 || val == 0) && skip_msr != val) {
-		skip_msr = val;
-		pr_info("cave: skip_msr = %s\n", val ? "true" : "false");
+	sscanf(buf, "skip_arch = %d", &val);
+	if ((val == 1 || val == 0) && skip_arch != val) {
+		skip_arch = val;
+		pr_info("cave: skip_arch = %s\n", val ? "true" : "false");
 	}
 #endif
 
