@@ -312,7 +312,7 @@ static inline void _end_measure(unsigned long long start, enum cave_stat_idx c,
 #ifdef CONFIG_CAVE_RAW_VOLTAGE_LOGGING
 	if (reason == EXIT_SYSCALL)
 #ifdef CONFIG_CAVE_SYSCALL_CONTEXT
-		&& test_bit(current->cave_data.syscall_nr, syscall_enabled)
+		&& test_bit(current->cave.syscall_nr, syscall_enabled)
 #endif
 			trace_printk("%d %llu", smp_processor_id(), arch_read_voltage());
 #endif
@@ -750,7 +750,7 @@ static inline void _cave_switch(const volatile struct cave_context *next_ctx,
 
 __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 {
-	volatile struct cave_context *context = &current->cave_data.kernel_ctx;
+	volatile struct cave_context *context = &current->cave.kernel_ctx;
 #ifdef CONFIG_CAVE_SYSCALL_RATELIMIT
         struct syscall_ratelimit *p = this_cpu_ptr(&srl);
 #endif
@@ -759,10 +759,10 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 		return;
 
 #ifdef CONFIG_CAVE_SYSCALL_CONTEXT
-	current->cave_data.syscall_nr = syscall_nr;
+	current->cave.syscall_nr = syscall_nr;
 	if (cave_syscall_context_enabled && test_bit(syscall_nr, syscall_enabled)) {
-		current->cave_data.orig_kernel_ctx = current->cave_data.kernel_ctx;
-		current->cave_data.kernel_ctx = cave_syscall_context;
+		current->cave.orig_kernel_ctx = current->cave.kernel_ctx;
+		current->cave.kernel_ctx = cave_syscall_context;
 	}
 #endif
 
@@ -773,8 +773,8 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
          */
 
 	/* track cave tasks */
-	if (current->cave_data.custom_kernel_ctx
-	    || current->cave_data.custom_user_ctx)
+	if (current->cave.custom_kernel_ctx
+	    || current->cave.custom_user_ctx)
 		p->counter++;
 
         if (unlikely(!p->enabled))
@@ -789,7 +789,7 @@ __visible void cave_syscall_entry_switch(unsigned long syscall_nr)
 
 __visible void cave_entry_switch(void)
 {
-	volatile struct cave_context *context = &current->cave_data.kernel_ctx;
+	volatile struct cave_context *context = &current->cave.kernel_ctx;
 
 	if (!cave_enabled)
 		return;
@@ -809,7 +809,7 @@ __visible void cave_entry_switch(void)
 
 __visible void cave_exit_switch(void)
 {
-	volatile struct cave_context *context = &current->cave_data.user_ctx;
+	volatile struct cave_context *context = &current->cave.user_ctx;
 
 	if (!cave_enabled)
 		return;
@@ -824,7 +824,7 @@ __visible void cave_exit_switch(void)
 
 __visible void cave_syscall_exit_switch(void)
 {
-	volatile struct cave_context *context = &current->cave_data.user_ctx;
+	volatile struct cave_context *context = &current->cave.user_ctx;
 
 	if (!cave_enabled)
 		return;
@@ -837,8 +837,8 @@ __visible void cave_syscall_exit_switch(void)
 	 * This happens for example, on system calls which may sleep,
 	 * irq from kernel, syscall slowpath.
 	 */
-	if (cave_syscall_context_enabled && test_bit(current->cave_data.syscall_nr, syscall_enabled))
-		current->cave_data.kernel_ctx = current->cave_data.orig_kernel_ctx;
+	if (cave_syscall_context_enabled && test_bit(current->cave.syscall_nr, syscall_enabled))
+		current->cave.kernel_ctx = current->cave.orig_kernel_ctx;
 #endif
 
 #ifdef CONFIG_CAVE_SYSCALL_RATELIMIT
@@ -851,7 +851,7 @@ __visible void cave_syscall_exit_switch(void)
 
 void cave_guest_entry(void)
 {
-	volatile struct cave_context *context = &current->cave_data.user_ctx;
+	volatile struct cave_context *context = &current->cave.user_ctx;
 
 	if (!cave_enabled)
 		return;
@@ -862,7 +862,7 @@ EXPORT_SYMBOL_GPL(cave_guest_entry);
 
 void cave_guest_exit(void)
 {
-	volatile struct cave_context *context = &current->cave_data.kernel_ctx;
+	volatile struct cave_context *context = &current->cave.kernel_ctx;
 
 	if (!cave_enabled)
 		return;
@@ -889,11 +889,11 @@ void cave_exec_task(struct task_struct *p)
 	unsigned long flags;
 
 	if (p->flags & PF_KTHREAD) {
-		spin_lock_irqsave(&p->cave_data.lock, flags);
-		p->cave_data.user_ctx = cave_user_context;
-		p->cave_data.custom_kernel_ctx= false;
-		p->cave_data.custom_user_ctx = false;
-		spin_unlock_irqrestore(&p->cave_data.lock, flags);
+		spin_lock_irqsave(&p->cave.lock, flags);
+		p->cave.user_ctx = cave_user_context;
+		p->cave.custom_kernel_ctx= false;
+		p->cave.custom_user_ctx = false;
+		spin_unlock_irqrestore(&p->cave.lock, flags);
 	}
 }
 
@@ -902,12 +902,12 @@ void cave_exec_task(struct task_struct *p)
  */
 void cave_fork_init(struct task_struct *p)
 {
-	spin_lock_init(&p->cave_data.lock);
+	spin_lock_init(&p->cave.lock);
 
-	if (!p->cave_data.custom_kernel_ctx)
-		p->cave_data.kernel_ctx = cave_kernel_context;
-	if (!p->cave_data.custom_user_ctx)
-		p->cave_data.user_ctx = cave_user_context;
+	if (!p->cave.custom_kernel_ctx)
+		p->cave.kernel_ctx = cave_kernel_context;
+	if (!p->cave.custom_user_ctx)
+		p->cave.user_ctx = cave_user_context;
 }
 
 /*
@@ -916,7 +916,7 @@ void cave_fork_init(struct task_struct *p)
  */
 void cave_context_switch_voltage(struct task_struct *prev, struct task_struct *next)
 {
-	volatile struct cave_context *next_ctx = &next->cave_data.kernel_ctx;
+	volatile struct cave_context *next_ctx = &next->cave.kernel_ctx;
 
 	if (!cave_enabled)
 		return;
@@ -937,18 +937,18 @@ static void cave_apply_tasks(void)
 	 * Therefore it is safe to set kernel_ctx for them here.
 	 */
 	for_each_possible_cpu(i) {
-		idle_task(i)->cave_data.kernel_ctx = cave_user_context;
-		idle_task(i)->cave_data.user_ctx = cave_user_context;
+		idle_task(i)->cave.kernel_ctx = cave_user_context;
+		idle_task(i)->cave.user_ctx = cave_user_context;
 	}
 
 	read_lock(&tasklist_lock);
 	for_each_process_thread(g, p) {
-		spin_lock_irqsave(&p->cave_data.lock, flags);
-		if (!p->cave_data.custom_kernel_ctx)
-			p->cave_data.kernel_ctx = cave_kernel_context;
-		if (!p->cave_data.custom_user_ctx)
-			p->cave_data.user_ctx = cave_user_context;
-		spin_unlock_irqrestore(&p->cave_data.lock, flags);
+		spin_lock_irqsave(&p->cave.lock, flags);
+		if (!p->cave.custom_kernel_ctx)
+			p->cave.kernel_ctx = cave_kernel_context;
+		if (!p->cave.custom_user_ctx)
+			p->cave.user_ctx = cave_user_context;
+		spin_unlock_irqrestore(&p->cave.lock, flags);
 	}
 	read_unlock(&tasklist_lock);
 }
@@ -1760,21 +1760,21 @@ SYSCALL_DEFINE4(cave_ctl, int, action, int, pid, int, kernel_voffset, int, user_
 		    && (user_voffset < 0 || user_voffset > cave_max_context.voffset))
 			return -EINVAL;
 
-		spin_lock_irqsave(&p->cave_data.lock, flags);
+		spin_lock_irqsave(&p->cave.lock, flags);
 		if (kernel_voffset != CAVE_KEEP_VOFFSET) {
-			p->cave_data.kernel_ctx = CAVE_CONTEXT(kernel_voffset);
-			p->cave_data.custom_kernel_ctx = true;
+			p->cave.kernel_ctx = CAVE_CONTEXT(kernel_voffset);
+			p->cave.custom_kernel_ctx = true;
 		}
 		if (user_voffset != CAVE_KEEP_VOFFSET) {
-			p->cave_data.user_ctx = CAVE_CONTEXT(user_voffset);
-			p->cave_data.custom_user_ctx = true;
+			p->cave.user_ctx = CAVE_CONTEXT(user_voffset);
+			p->cave.custom_user_ctx = true;
 		}
-		spin_unlock_irqrestore(&p->cave_data.lock, flags);
+		spin_unlock_irqrestore(&p->cave.lock, flags);
 
 		pr_info("cave: %s [pid=%d] set voffset: kernel=%ld, user=%ld\n",
 			p->comm, task_pid_vnr(p),
-			p->cave_data.kernel_ctx.voffset,
-			p->cave_data.user_ctx.voffset);
+			p->cave.kernel_ctx.voffset,
+			p->cave.user_ctx.voffset);
 
 		return 0;
 	}

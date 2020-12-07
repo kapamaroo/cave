@@ -518,7 +518,7 @@ struct task_struct {
 	unsigned int			rt_priority;
 
 #ifdef CONFIG_CAVE
-	cave_data_t			cave_data;
+	cave_data_t			cave;
 #endif
 
 	const struct sched_class	*sched_class;

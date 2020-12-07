@@ -30,7 +30,7 @@ typedef struct cave_data {
 #endif
 
 #define INIT_TASK_CAVE							\
-	.cave_data = {							\
+	.cave = {							\
 		.kernel_ctx = { .voffset = CAVE_NOMINAL_VOFFSET },	\
 		.user_ctx = { .voffset = CAVE_NOMINAL_VOFFSET },	\
 		INIT_TASK_SYSCALL_CONTEXT				\
