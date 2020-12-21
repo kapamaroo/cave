@@ -1771,10 +1771,16 @@ SYSCALL_DEFINE4(cave_ctl, int, action, int, pid, int, kernel_voffset, int, user_
 		}
 		spin_unlock_irqrestore(&p->cave.lock, flags);
 
-		pr_info("cave: %s [pid=%d] set voffset: kernel=%ld, user=%ld\n",
-			p->comm, task_pid_vnr(p),
-			p->cave.kernel_ctx.voffset,
-			p->cave.user_ctx.voffset);
+		if (p->cave.custom_kernel_ctx && p->cave.custom_user_ctx)
+			pr_info("cave: %s [pid=%d] set voffset: kernel=%ld, user=%ld\n",
+				p->comm, task_pid_vnr(p),
+				p->cave.kernel_ctx.voffset, p->cave.user_ctx.voffset);
+		else if (p->cave.custom_kernel_ctx)
+			pr_info("cave: %s [pid=%d] set voffset: kernel=%ld\n",
+				p->comm, task_pid_vnr(p), p->cave.kernel_ctx.voffset);
+		else if (p->cave.custom_user_ctx)
+			pr_info("cave: %s [pid=%d] set voffset: user=%ld\n",
+				p->comm, task_pid_vnr(p), p->cave.user_ctx.voffset);
 
 		return 0;
 	}
