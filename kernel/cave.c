@@ -932,15 +932,6 @@ static void cave_apply_tasks(void)
 
 	int i;
 
-	/* Idle tasks do not run on user mode, i.e. they don't enter kernel
-	 * through entry points, but from schedule() context_switch().
-	 * Therefore it is safe to set kernel_ctx for them here.
-	 */
-	for_each_possible_cpu(i) {
-		idle_task(i)->cave.kernel_ctx = cave_user_context;
-		idle_task(i)->cave.user_ctx = cave_user_context;
-	}
-
 	read_lock(&tasklist_lock);
 	for_each_process_thread(g, p) {
 		spin_lock_irqsave(&p->cave.lock, flags);
@@ -948,6 +939,18 @@ static void cave_apply_tasks(void)
 			p->cave.kernel_ctx = cave_kernel_context;
 		if (!p->cave.custom_user_ctx)
 			p->cave.user_ctx = cave_user_context;
+		spin_unlock_irqrestore(&p->cave.lock, flags);
+	}
+
+	/* Idle tasks do not run on user mode, i.e. they don't enter kernel
+	 * through entry points, but from schedule() context_switch().
+	 * Therefore it is safe to set kernel_ctx for them here.
+	 */
+	for_each_possible_cpu(i) {
+		p = idle_task(i);
+		spin_lock_irqsave(&p->cave.lock, flags);
+		p->cave.kernel_ctx = cave_user_context;
+		p->cave.user_ctx = cave_user_context;
 		spin_unlock_irqrestore(&p->cave.lock, flags);
 	}
 	read_unlock(&tasklist_lock);
